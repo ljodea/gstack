@@ -258,7 +258,17 @@ Use AskUserQuestion:
   git log --format="%an (%ae)" -1 -- <source-file-under-test>
   ```
   If these are different people, prefer the production code author — they likely introduced the regression.
-- Create an issue assigned to that person (use the platform detected in Step 0):
+- Create an issue assigned to that person. Check for a beads tracker first — the beads check takes precedence over the platform detected in Step 0:
+  - **If beads (`.beads/config.yaml` at the git toplevel):**
+    ```bash
+    top=$(git rev-parse --show-toplevel)
+    # [ -f "$top/.beads/config.yaml" ] → issues live in beads, not on the platform
+    bd create \
+      --title "Pre-existing test failure: <test-name>" \
+      -t bug -p 2 \
+      --body-file <file-with-error-output-last-author-and-date>
+    ```
+    `bd create` has no assignee flag — name the likely author in the body. If the marker file is present but `bd` is missing or the DB won't open, STOP and report the error. Never fall back to `gh` or `glab` — the marker says issues live in beads.
   - **If GitHub:**
     ```bash
     gh issue create \

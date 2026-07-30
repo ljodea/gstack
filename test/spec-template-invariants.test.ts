@@ -157,6 +157,21 @@ describe('/spec redaction at every sink (scan-at-sink)', () => {
   test('files from the scanned temp file (exact bytes, not a re-render)', () => {
     expect(GEN).toMatch(/gh issue create --title "<title>" --body-file "\$REDACT_FILE"/);
   });
+  test('beads route also files from the scanned temp file', () => {
+    expect(GEN).toMatch(/bd create --title "<title>" -t task -p 2 --body-file "\$REDACT_FILE"/);
+  });
+  test('scan precedes the bd create (pre-issue) and beads precedes gh', () => {
+    const scanIdx = GEN.indexOf('Re-scan before filing');
+    const bdIdx = GEN.indexOf('bd create --title');
+    const ghIdx = GEN.indexOf('gh issue create --title');
+    expect(scanIdx).toBeGreaterThan(-1);
+    expect(bdIdx).toBeGreaterThan(scanIdx);
+    expect(ghIdx).toBeGreaterThan(bdIdx);
+  });
+  test('beads marker present + broken bd stops instead of falling back to gh', () => {
+    expect(GEN).toContain('.beads/config.yaml');
+    expect(GEN).toMatch(/never fall back to `gh issue create`/i);
+  });
   test('scan precedes the archive write (pre-archive)', () => {
     const scanIdx = GEN.indexOf('Re-scan before archiving');
     const archIdx = GEN.indexOf('ARCHIVE_PATH.tmp');

@@ -1807,6 +1807,13 @@ describe('Test failure triage in ship skill', () => {
     expect(content).toContain('--assignee');
   });
 
+  test('ship/SKILL.md triage routes to beads before GitHub/GitLab when the marker is present', () => {
+    const content = readShipUnion();
+    expect(content).toContain('.beads/config.yaml');
+    expect(content).toContain('bd create');
+    expect(content.indexOf('bd create')).toBeLessThan(content.indexOf('gh issue create'));
+  });
+
   test('{{TEST_FAILURE_TRIAGE}} placeholder is fully resolved in ship/SKILL.md', () => {
     const content = readShipUnion();
     expect(content).not.toContain('{{TEST_FAILURE_TRIAGE}}');
