@@ -829,7 +829,7 @@ separated tokens starting with `--`. Last flag wins on conflict.
 
 | Flag | Default | Effect |
 |------|---------|--------|
-| `--dedupe` | ON | Phase 1: check `gh issue list --search` for near-duplicates before drafting. |
+| `--dedupe` | ON | Phase 1: check the issue tracker for near-duplicates before drafting (`bd list` when `.beads/config.yaml` sits at the git toplevel, else `gh issue list --search`). |
 | `--no-dedupe` | — | Skip the dedupe check. |
 | `--no-gate` | OFF (gate is ON) | Skip the codex quality-score gate between Phase 4 and Phase 5. **Redaction (Phase 4.5a semantic + 4.5b regex) still runs — there is no flag that disables it.** |
 | `--audit` | OFF | Route Phase 5 to the Audit/Cleanup template (instead of Standard). |
@@ -860,7 +860,32 @@ confirm: "Flags: dedupe=ON, gate=ON, audit=OFF, execute=auto (plan mode = ...)."
 Do NOT proceed until all five are answered without hand-waving.
 
 **Step 1b (--dedupe is ON by default):** Before Phase 4, run dedupe check. Extract
-2-4 keywords from the user's request and the working title you have in mind, then:
+2-4 keywords from the user's request and the working title you have in mind.
+
+**Route to the right tracker first.** A repo whose git toplevel carries a committed
+`.beads/config.yaml` tracks issues in beads (`bd`), not on GitHub. This check takes
+precedence over platform detection:
+
+```bash
+top=$(git rev-parse --show-toplevel)
+[ -f "$top/.beads/config.yaml" ] && echo "tracker: beads" || echo "tracker: github"
+```
+
+**If beads:** search open beads by title match:
+
+```bash
+bd list --status open --json -n 0 2>&1
+```
+
+Match the extracted keywords against the returned titles (case-insensitive).
+Interpret: 0 matches → continue silently to Phase 2. 1+ matches → surface them via
+AskUserQuestion exactly as in the GitHub path below (merge / file new / cancel).
+If the marker file is present but `bd` is not installed or the DB won't open,
+**STOP and report the error** — never fall back to `gh issue list`. The marker
+says issues live in beads; a missing tool is an error to surface, not a branch
+to route around.
+
+**If GitHub** (no beads marker):
 
 ```bash
 gh issue list --search "<keywords>" --state open --limit 10 --json number,title,url 2>&1
@@ -1896,7 +1921,31 @@ reuse it; write the exact bytes to `$REDACT_FILE`; `~/.claude/skills/gstack/bin/
 exit-3/2/0 handling. On exit 3, do NOT file the issue; HIGH has no skip. Pass the
 same `$REDACT_FILE` downstream so the bytes scanned are the bytes sent.
 
-If `gh` is available and authenticated, file from the scanned temp file:
+**Route to the right tracker first** — the beads check takes precedence over
+platform detection:
+
+```bash
+top=$(git rev-parse --show-toplevel)
+[ -f "$top/.beads/config.yaml" ] && echo "tracker: beads" || echo "tracker: github"
+```
+
+**If beads:** file from the scanned temp file. `bd create` emits an issue id
+(e.g. `gs-42`), not a URL — capture it as `ISSUE_NUMBER` and leave `ISSUE_URL`
+empty. Skip the URL parsing below; everywhere later steps ask for `$ISSUE_URL`,
+use the bead id instead.
+
+```bash
+ISSUE_NUMBER=$(bd create --title "<title>" -t task -p 2 --body-file "$REDACT_FILE" --silent)
+echo "Filed: $ISSUE_NUMBER"
+~/.claude/skills/gstack/bin/gstack-decision-log '{"decision":"Spec filed #ISSUE_NUMBER: TITLE","rationale":"APPROACH","scope":"issue","issue":"ISSUE_NUMBER","source":"skill","confidence":7}' 2>/dev/null || true
+```
+
+If the marker file is present but `bd` is not installed or the DB won't open,
+**STOP and report the error** — never fall back to `gh issue create`. Do not
+print the paste-into-GitHub fallback either; the repo's issues do not live there.
+
+**If GitHub** (no beads marker) and `gh` is available and authenticated, file
+from the scanned temp file:
 
 ```bash
 ISSUE_URL=$(gh issue create --title "<title>" --body-file "$REDACT_FILE")

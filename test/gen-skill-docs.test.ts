@@ -955,6 +955,15 @@ describe('TEST_FAILURE_TRIAGE resolver', () => {
     expect(shipSkill).toContain('gh issue create');
   });
 
+  test('collaborative mode routes to beads first when the marker is present', () => {
+    expect(shipSkill).toContain('.beads/config.yaml');
+    expect(shipSkill).toContain('bd create');
+    // Beads branch must precede the GitHub branch — the marker check takes precedence.
+    expect(shipSkill.indexOf('bd create')).toBeLessThan(shipSkill.indexOf('gh issue create'));
+    // No silent fallback: marker present + broken bd must stop, not reroute to gh.
+    expect(shipSkill).toContain('Never fall back to `gh`');
+  });
+
   test('defaults ambiguous failures to in-branch (safety)', () => {
     expect(shipSkill).toContain('When ambiguous, default to in-branch');
   });
