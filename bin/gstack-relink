@@ -33,6 +33,26 @@ fi
 SKILLS_DIR="${GSTACK_SKILLS_DIR:-$(dirname "$INSTALL_DIR")}"
 [ -d "$SKILLS_DIR" ] || mkdir -p "$SKILLS_DIR"
 
+# factory-skills: never rewrite the shared skills/ wrappers. ~/.claude/skills
+# is a symlink into that repo, and this script prefers it as INSTALL_DIR —
+# even when invoked from this live clone. Detect the vendor tree by the target.
+_SKILLS_REAL="$(cd "$SKILLS_DIR" && pwd -P)"
+_INSTALL_REAL="$(cd "$INSTALL_DIR" && pwd -P)"
+_fs_vendor_root() {
+  local root
+  root="$(cd "$1/.." && pwd -P)"
+  if [ -f "$root/bin/gen-codex-view.sh" ] && [ -d "$root/skills-codex" ]; then
+    echo "$root"
+    return 0
+  fi
+  return 1
+}
+if _fs_vendor_root "$_SKILLS_REAL" >/dev/null || _fs_vendor_root "$(dirname "$_INSTALL_REAL")" >/dev/null; then
+  echo "Refusing to run: target is the factory-skills vendor skills dir." >&2
+  echo "gstack-relink would rewrite wrapper SKILL.md links to absolute paths." >&2
+  exit 1
+fi
+
 # Read prefix setting
 PREFIX=$("$GSTACK_CONFIG" get skill_prefix 2>/dev/null || echo "false")
 
