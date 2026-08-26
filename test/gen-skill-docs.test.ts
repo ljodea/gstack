@@ -1741,10 +1741,10 @@ describe('Codex generation (--host codex)', () => {
     cwd: ROOT, stdout: 'pipe', stderr: 'pipe',
   });
 
-  // Dynamic discovery of expected Codex skills: all templates except Claude-only
-  // outside-voice wrappers (/codex, /grok). Also excludes skills where
-  // .agents/skills/{name} is a symlink back to the repo root (vendored dev mode —
-  // gen-skill-docs skips these to avoid overwriting Claude SKILL.md).
+  // Dynamic discovery of expected Codex skills: all templates.
+  // Also excludes skills where .agents/skills/{name} is a symlink back to the
+  // repo root (vendored dev mode — gen-skill-docs skips these to avoid
+  // overwriting Claude SKILL.md).
   const CODEX_SKILLS = (() => {
     const skills: Array<{ dir: string; codexName: string }> = [];
     const isSymlinkLoop = (codexName: string): boolean => {
@@ -1760,7 +1760,6 @@ describe('Codex generation (--host codex)', () => {
     }
     for (const entry of fs.readdirSync(ROOT, { withFileTypes: true })) {
       if (!entry.isDirectory() || entry.name.startsWith('.') || entry.name === 'node_modules') continue;
-      if (entry.name === 'codex' || entry.name === 'grok') continue; // Claude-only outside-voice skills
       if (!fs.existsSync(path.join(ROOT, entry.name, 'SKILL.md.tmpl'))) continue;
       const codexName = entry.name.startsWith('gstack-') ? entry.name : `gstack-${entry.name}`;
       if (isSymlinkLoop(codexName)) continue;
@@ -1839,9 +1838,9 @@ describe('Codex generation (--host codex)', () => {
     }
   });
 
-  test('/codex skill excluded from Codex output', () => {
-    expect(fs.existsSync(path.join(AGENTS_DIR, 'gstack-codex', 'SKILL.md'))).toBe(false);
-    expect(fs.existsSync(path.join(AGENTS_DIR, 'gstack-codex'))).toBe(false);
+  test('/codex and /grok skills included in Codex output', () => {
+    expect(fs.existsSync(path.join(AGENTS_DIR, 'gstack-codex', 'SKILL.md'))).toBe(true);
+    expect(fs.existsSync(path.join(AGENTS_DIR, 'gstack-grok', 'SKILL.md'))).toBe(true);
   });
 
   test('Codex output includes Claude outside-voice skill with read-only boundary', () => {
@@ -2162,7 +2161,7 @@ describe('Factory generation (--host factory)', () => {
     }
     for (const entry of fs.readdirSync(ROOT, { withFileTypes: true })) {
       if (!entry.isDirectory() || entry.name.startsWith('.') || entry.name === 'node_modules') continue;
-      if (entry.name === 'codex' || entry.name === 'grok') continue; // Claude-only outside-voice skills
+      if (entry.name === 'codex') continue; // Factory host skipSkills still omits /codex
       if (!fs.existsSync(path.join(ROOT, entry.name, 'SKILL.md.tmpl'))) continue;
       const factoryName = entry.name.startsWith('gstack-') ? entry.name : `gstack-${entry.name}`;
       if (isSymlinkLoop(factoryName)) continue;

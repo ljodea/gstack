@@ -569,16 +569,21 @@ describe('host config correctness', () => {
     expect(openclaw.coAuthorTrailer).toContain('OpenClaw');
   });
 
-  test('every external host skips the codex skill', () => {
+  test('external hosts other than Codex skip the codex skill', () => {
     for (const config of getExternalHosts()) {
+      if (config.name === 'codex') continue;
       expect(config.generation.skipSkills).toContain('codex');
     }
   });
 
-  test('every external host skips the grok skill', () => {
-    // /grok is a Claude-host wrapper around the Grok Build CLI — same shape as /codex.
-    for (const config of getExternalHosts()) {
-      expect(config.generation.skipSkills).toContain('grok');
+  test('Codex host keeps the codex and grok skills', () => {
+    expect(codex.generation.skipSkills ?? []).not.toContain('codex');
+    expect(codex.generation.skipSkills ?? []).not.toContain('grok');
+  });
+
+  test('no host skips the grok skill', () => {
+    for (const config of ALL_HOST_CONFIGS) {
+      expect(config.generation.skipSkills ?? []).not.toContain('grok');
     }
   });
 

@@ -98,7 +98,7 @@ export function defineHost<const N extends string>(overrides: HostOverrides<N>):
     },
     generation = {
       generateMetadata: false,
-      skipSkills: ['codex', 'grok'],  // Outside-voice CLI wrappers (Claude host only)
+      skipSkills: ['codex'],  // Codex skill is a Claude wrapper around codex exec
     },
     pathRewrites,
     extraPathRewrites,

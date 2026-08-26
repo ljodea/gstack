@@ -22,7 +22,8 @@ const codex = defineHost({
   // ETHOS.md) — that behavior lives in setup's create_agents_sidecar, not here.
   generation: {
     generateMetadata: true,
-    skipSkills: ['codex', 'grok'],  // Outside-voice CLI wrappers (Claude host only)
+    // Empty: /codex and /grok stay available as outside voices on Codex/pi.
+    skipSkills: [],
   },
 
   // Non-mechanical rewrites: the global path becomes $GSTACK_ROOT (resolved by
