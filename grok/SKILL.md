@@ -879,9 +879,10 @@ faithfully, not summarized.
 ## Step 0.4: Check grok binary
 
 ```bash
-# TEMP (2026-07): default Grok account is #3 (~/.grok3). Override with GROK_HOME or use grok/grok2 wrappers.
-export GROK_HOME="${GROK_HOME:-$HOME/.grok3}"
-GROK_BIN=$(command -v grok3 || command -v grok || echo "")
+# Active account resolved by grok-pick (preference file + 402 markers) unless GROK_HOME is preset.
+[ -n "${GROK_HOME:-}" ] || eval "$("$HOME/Code/factory-skills/bin/grok-pick")"
+export GROK_HOME
+GROK_BIN=$(command -v grok || echo "")
 [ -z "$GROK_BIN" ] && echo "NOT_FOUND" || echo "FOUND: $GROK_BIN ($GROK_HOME)"
 ```
 
@@ -902,8 +903,9 @@ Before building expensive prompts, verify Grok has valid auth. Sourcing
 `gstack-grok-probe` loads the shared helpers.
 
 ```bash
-# TEMP (2026-07): default Grok account is #3 (~/.grok3). Override with GROK_HOME or use grok/grok2 wrappers.
-export GROK_HOME="${GROK_HOME:-$HOME/.grok3}"
+# Active account resolved by grok-pick (preference file + 402 markers) unless GROK_HOME is preset.
+[ -n "${GROK_HOME:-}" ] || eval "$("$HOME/Code/factory-skills/bin/grok-pick")"
+export GROK_HOME
 _TEL=$(~/.claude/skills/gstack/bin/gstack-config get telemetry 2>/dev/null || echo off)
 source ~/.claude/skills/gstack/bin/gstack-grok-probe
 
@@ -915,10 +917,10 @@ _gstack_grok_version_check
 ```
 
 If the output contains `AUTH_FAILED`, stop and tell the user:
-"No Grok authentication found. Run `grok3 login` or set `$XAI_API_KEY`, then re-run this skill."
+"No Grok authentication found. Auth the account grok-pick chose (`grok login --device-auth` with that `GROK_HOME`) or set `$XAI_API_KEY`, then re-run this skill."
 
 The probe accepts: `$XAI_API_KEY` set, `$GROK_API_KEY` set, or
-`${GROK_HOME:-~/.grok3}/auth.json` exists.
+`$GROK_HOME/auth.json` exists (account chosen by grok-pick).
 
 ---
 
@@ -967,7 +969,7 @@ use `--effort max` for all modes. If the input contains `--xhigh`, use
 
 **Never pass `--reasoning-effort` to Grok.** Use `--effort` instead (the short alias).
 
-**Default model:** `grok-4.5`. Every headless invocation MUST pass `-m grok-4.5`
+**Default model:** `grok-4.6`. Every headless invocation MUST pass `-m grok-4.6`
 unless the user explicitly overrides with `-m <other-model>`.
 
 ---
@@ -988,7 +990,7 @@ Grok runs **read-only** via `--permission-mode plan`. Never use `acceptEdits`,
 `auto`, or `bypassPermissions` in this skill.
 
 Shared flags for every invocation:
-- `-m grok-4.5` (default model; override only if the user passed `-m <other>`)
+- `-m grok-4.6` (default model; override only if the user passed `-m <other>`)
 - `--cwd "$_REPO_ROOT"`
 - `--permission-mode plan`
 - `--no-subagents`
@@ -1013,9 +1015,10 @@ TMPERR=$(mktemp "$TMP_ROOT/grok-err-XXXXXX.txt")
 **Default path (no custom user instructions):** prompt Grok to diff-scope itself:
 
 ```bash
-# TEMP (2026-07): default Grok account is #3 (~/.grok3). Override with GROK_HOME or use grok/grok2 wrappers.
-export GROK_HOME="${GROK_HOME:-$HOME/.grok3}"
-GROK_BIN=$(command -v grok3 || command -v grok || echo "grok")
+# Active account resolved by grok-pick (preference file + 402 markers) unless GROK_HOME is preset.
+[ -n "${GROK_HOME:-}" ] || eval "$("$HOME/Code/factory-skills/bin/grok-pick")"
+export GROK_HOME
+GROK_BIN=$(command -v grok || echo grok)
 _REPO_ROOT=$(git rev-parse --show-toplevel) || { echo "ERROR: not in a git repo" >&2; exit 1; }
 cd "$_REPO_ROOT"
 _PROMPT_FILE=$(mktemp "$TMP_ROOT/grok-prompt-XXXXXX.txt")
@@ -1024,13 +1027,13 @@ _PROMPT_FILE=$(mktemp "$TMP_ROOT/grok-prompt-XXXXXX.txt")
   printf '\nReview the changes on this branch against the base branch <base>. Run git diff origin/<base>...HEAD 2>/dev/null || git diff <base>...HEAD to see the diff and review only those changes.\n'
   printf 'Produce findings marked [P1] (critical) or [P2] (advisory). No compliments — actionable issues only.\n'
 } > "$_PROMPT_FILE"
-_gstack_grok_timeout_wrapper 630 "$GROK_BIN" -m grok-4.5 --prompt-file "$_PROMPT_FILE" --permission-mode plan --max-turns 12 --effort high --no-subagents --output-format plain --cwd "$_REPO_ROOT" < /dev/null 2>"$TMPERR"
+_gstack_grok_timeout_wrapper 630 "$GROK_BIN" -m grok-4.6 --prompt-file "$_PROMPT_FILE" --permission-mode plan --max-turns 12 --effort high --no-subagents --output-format plain --cwd "$_REPO_ROOT" < /dev/null 2>"$TMPERR"
 _GROK_EXIT=$?
 rm -f "$_PROMPT_FILE"
 if [ "$_GROK_EXIT" = "124" ]; then
   _gstack_grok_log_event "grok_timeout" "630"
   _gstack_grok_log_hang "review" "$(wc -c < "$TMPERR" 2>/dev/null || echo 0)"
-  echo "Grok stalled past 10.5 minutes. Try re-running with a smaller scope or check ~/.grok3/logs/ (or $GROK_HOME/logs)."
+  echo "Grok stalled past 10.5 minutes. Try re-running with a smaller scope or check $GROK_HOME/logs."
 elif [ "$_GROK_EXIT" != "0" ]; then
   echo "[grok exit $_GROK_EXIT] $(head -1 "$TMPERR" 2>/dev/null || echo "no stderr captured")"
   head -20 "$TMPERR" 2>/dev/null | sed 's/^/  /' || true
@@ -1039,15 +1042,16 @@ fi
 ```
 
 If the user passed `--max` or `--xhigh`, substitute the matching `--effort` value.
-If the user passed `-m <model>`, substitute that model for `grok-4.5`.
+If the user passed `-m <model>`, substitute that model for `grok-4.6`.
 
 **Custom-instructions path (user typed `/grok review <focus>`):** inline the diff
 with DIFF_START/DIFF_END delimiters:
 
 ```bash
-# TEMP (2026-07): default Grok account is #3 (~/.grok3). Override with GROK_HOME or use grok/grok2 wrappers.
-export GROK_HOME="${GROK_HOME:-$HOME/.grok3}"
-GROK_BIN=$(command -v grok3 || command -v grok || echo "grok")
+# Active account resolved by grok-pick (preference file + 402 markers) unless GROK_HOME is preset.
+[ -n "${GROK_HOME:-}" ] || eval "$("$HOME/Code/factory-skills/bin/grok-pick")"
+export GROK_HOME
+GROK_BIN=$(command -v grok || echo grok)
 _REPO_ROOT=$(git rev-parse --show-toplevel) || { echo "ERROR: not in a git repo" >&2; exit 1; }
 cd "$_REPO_ROOT"
 _USER_INSTRUCTIONS="<everything after '/grok review ' in user input>"
@@ -1060,7 +1064,7 @@ _PROMPT_FILE=$(mktemp "$TMP_ROOT/grok-prompt-XXXXXX.txt")
   git diff "<base>...HEAD" 2>/dev/null
   printf '\nDIFF_END\n'
 } > "$_PROMPT_FILE"
-_gstack_grok_timeout_wrapper 630 "$GROK_BIN" -m grok-4.5 --prompt-file "$_PROMPT_FILE" --permission-mode plan --max-turns 12 --effort high --no-subagents --output-format plain --cwd "$_REPO_ROOT" < /dev/null 2>"$TMPERR"
+_gstack_grok_timeout_wrapper 630 "$GROK_BIN" -m grok-4.6 --prompt-file "$_PROMPT_FILE" --permission-mode plan --max-turns 12 --effort high --no-subagents --output-format plain --cwd "$_REPO_ROOT" < /dev/null 2>"$TMPERR"
 _GROK_EXIT=$?
 rm -f "$_PROMPT_FILE"
 if [ "$_GROK_EXIT" = "124" ]; then
@@ -1257,14 +1261,15 @@ With focus (e.g., `/grok challenge security`), add: "Focus specifically on SECUR
 2. Run Grok headless (10-minute timeout):
 
 ```bash
-# TEMP (2026-07): default Grok account is #3 (~/.grok3). Override with GROK_HOME or use grok/grok2 wrappers.
-export GROK_HOME="${GROK_HOME:-$HOME/.grok3}"
-GROK_BIN=$(command -v grok3 || command -v grok || echo "grok")
+# Active account resolved by grok-pick (preference file + 402 markers) unless GROK_HOME is preset.
+[ -n "${GROK_HOME:-}" ] || eval "$("$HOME/Code/factory-skills/bin/grok-pick")"
+export GROK_HOME
+GROK_BIN=$(command -v grok || echo grok)
 _REPO_ROOT=$(git rev-parse --show-toplevel) || { echo "ERROR: not in a git repo" >&2; exit 1; }
 TMPERR=${TMPERR:-$(mktemp "$TMP_ROOT/grok-err-XXXXXX.txt")}
 _PROMPT_FILE=$(mktemp "$TMP_ROOT/grok-prompt-XXXXXX.txt")
 printf '%s\n' "<prompt>" > "$_PROMPT_FILE"
-_gstack_grok_timeout_wrapper 630 "$GROK_BIN" -m grok-4.5 --prompt-file "$_PROMPT_FILE" --permission-mode plan --max-turns 20 --effort high --no-subagents --output-format plain --cwd "$_REPO_ROOT" < /dev/null 2>"$TMPERR"
+_gstack_grok_timeout_wrapper 630 "$GROK_BIN" -m grok-4.6 --prompt-file "$_PROMPT_FILE" --permission-mode plan --max-turns 20 --effort high --no-subagents --output-format plain --cwd "$_REPO_ROOT" < /dev/null 2>"$TMPERR"
 _GROK_EXIT=$?
 rm -f "$_PROMPT_FILE"
 if [ "$_GROK_EXIT" = "124" ]; then
@@ -1322,32 +1327,34 @@ Prepend the filesystem boundary to every prompt.
 
 For a **new session:**
 ```bash
-# TEMP (2026-07): default Grok account is #3 (~/.grok3). Override with GROK_HOME or use grok/grok2 wrappers.
-export GROK_HOME="${GROK_HOME:-$HOME/.grok3}"
-GROK_BIN=$(command -v grok3 || command -v grok || echo "grok")
+# Active account resolved by grok-pick (preference file + 402 markers) unless GROK_HOME is preset.
+[ -n "${GROK_HOME:-}" ] || eval "$("$HOME/Code/factory-skills/bin/grok-pick")"
+export GROK_HOME
+GROK_BIN=$(command -v grok || echo grok)
 _REPO_ROOT=$(git rev-parse --show-toplevel) || { echo "ERROR: not in a git repo" >&2; exit 1; }
 _PROMPT_FILE=$(mktemp "$TMP_ROOT/grok-prompt-XXXXXX.txt")
 printf '%s\n' "<prompt with boundary + user question or embedded plan>" > "$_PROMPT_FILE"
-_gstack_grok_timeout_wrapper 630 "$GROK_BIN" -m grok-4.5 --prompt-file "$_PROMPT_FILE" --permission-mode plan --max-turns 15 --effort medium --no-subagents --output-format plain --cwd "$_REPO_ROOT" < /dev/null 2>"$TMPERR"
+_gstack_grok_timeout_wrapper 630 "$GROK_BIN" -m grok-4.6 --prompt-file "$_PROMPT_FILE" --permission-mode plan --max-turns 15 --effort medium --no-subagents --output-format plain --cwd "$_REPO_ROOT" < /dev/null 2>"$TMPERR"
 _GROK_EXIT=$?
 rm -f "$_PROMPT_FILE"
 ```
 
 For a **resumed session** (user chose "Continue"):
 ```bash
-# TEMP (2026-07): default Grok account is #3 (~/.grok3). Override with GROK_HOME or use grok/grok2 wrappers.
-export GROK_HOME="${GROK_HOME:-$HOME/.grok3}"
-GROK_BIN=$(command -v grok3 || command -v grok || echo "grok")
+# Active account resolved by grok-pick (preference file + 402 markers) unless GROK_HOME is preset.
+[ -n "${GROK_HOME:-}" ] || eval "$("$HOME/Code/factory-skills/bin/grok-pick")"
+export GROK_HOME
+GROK_BIN=$(command -v grok || echo grok)
 _REPO_ROOT=$(git rev-parse --show-toplevel) || { echo "ERROR: not in a git repo" >&2; exit 1; }
 _SESSION_ID=$(cat .context/grok-session-id 2>/dev/null)
 _PROMPT_FILE=$(mktemp "$TMP_ROOT/grok-prompt-XXXXXX.txt")
 printf '%s\n' "<prompt>" > "$_PROMPT_FILE"
-_gstack_grok_timeout_wrapper 630 "$GROK_BIN" -r "$_SESSION_ID" -m grok-4.5 --prompt-file "$_PROMPT_FILE" --permission-mode plan --max-turns 15 --effort medium --no-subagents --output-format plain --cwd "$_REPO_ROOT" < /dev/null 2>"$TMPERR"
+_gstack_grok_timeout_wrapper 630 "$GROK_BIN" -r "$_SESSION_ID" -m grok-4.6 --prompt-file "$_PROMPT_FILE" --permission-mode plan --max-turns 15 --effort medium --no-subagents --output-format plain --cwd "$_REPO_ROOT" < /dev/null 2>"$TMPERR"
 _GROK_EXIT=$?
 rm -f "$_PROMPT_FILE"
 ```
 
-Alternative resume when session ID is stale: `"$GROK_BIN" -c --prompt-file "$_PROMPT_FILE" ...` (with GROK_HOME=~/.grok3)
+Alternative resume when session ID is stale: `"$GROK_BIN" -c --prompt-file "$_PROMPT_FILE" ...` (with the grok-pick GROK_HOME)
 (continues the most recent session for this cwd).
 
 Hang/auth handling mirrors Step 2B.
@@ -1369,11 +1376,11 @@ _GROK_SID=$(grok sessions list -n 5 2>/dev/null | awk 'NF && $1 ~ /^[0-9a-f]{8}-
 
 ## Model & Effort
 
-**Model:** Default is **`grok-4.5`**. Every headless invocation passes
-`-m grok-4.5`. If the user specifies another model (e.g., `/grok review -m grok-3`
+**Model:** Default is **`grok-4.6`**. Every headless invocation passes
+`-m grok-4.6`. If the user specifies another model (e.g., `/grok review -m grok-3`
 or `/grok consult -m grok-composer-2.5-fast`), substitute that value for `-m`.
 
-Auth is unchanged: `grok3 login` OAuth (`~/.grok3/auth.json`) or `$XAI_API_KEY` /
+Auth is unchanged: `grok login --device-auth` OAuth (`$GROK_HOME/auth.json`) or `$XAI_API_KEY` /
 `$GROK_API_KEY` via `gstack-grok-probe`.
 
 **Effort (per-mode defaults):**
@@ -1388,7 +1395,8 @@ Override with `--xhigh` or `--max` in the user invocation (maps to `--effort`).
 ## Error Handling
 
 - **Binary not found:** Stop with install instructions (Step 0.4).
-- **Auth error:** "Grok authentication failed. Run `grok3 login` or set `$XAI_API_KEY`."
+- **Auth error:** "Grok authentication failed. Auth the grok-pick account (`grok login --device-auth`) or set `$XAI_API_KEY`."
+- **Usage exhausted (HTTP 402 / "usage balance exhausted"):** NOT an auth failure. Mark the account and advance: `_N=$(basename "$GROK_HOME"); touch ~/.config/factory/grok-402.${_N#.}`, then re-run `eval "$("$HOME/Code/factory-skills/bin/grok-pick")"` and retry ONCE. If grok-pick finds no candidate, stop and report.
 - **Timeout (exit 124):** "Grok stalled past 10 minutes. Split the prompt or retry."
 - **Empty response:** "Grok returned no response. Check stderr in $TMPERR."
 - **Session resume failure:** Delete `.context/grok-session-id` and start fresh.
