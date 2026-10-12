@@ -28,16 +28,6 @@ import {
   generatePlanModeInfo,
 } from './preamble/generate-completion-status';
 
-// One-time onboarding prompts
-import { generateLakeIntro } from './preamble/generate-lake-intro';
-import { generateTelemetryPrompt } from './preamble/generate-telemetry-prompt';
-import { generateProactivePrompt } from './preamble/generate-proactive-prompt';
-import { generateFirstRunGuidance } from './preamble/generate-first-run-guidance';
-import { generateRoutingInjection } from './preamble/generate-routing-injection';
-import { generateVendoringDeprecation } from './preamble/generate-vendoring-deprecation';
-import { generateSpawnedSessionCheck } from './preamble/generate-spawned-session-check';
-import { generateWritingStyleMigration } from './preamble/generate-writing-style-migration';
-
 // Host-specific instructions
 import { generateBrainHealthInstruction } from './preamble/generate-brain-health-instruction';
 
@@ -54,7 +44,6 @@ import { generateWritingStyle } from './preamble/generate-writing-style';
 import { generateCompletenessSection } from './preamble/generate-completeness-section';
 import { generateConfusionProtocol } from './preamble/generate-confusion-protocol';
 import { generateEvidenceDirective } from './preamble/generate-evidence-directive';
-import { generateContinuousCheckpoint } from './preamble/generate-continuous-checkpoint';
 import { generateContextHealth } from './preamble/generate-context-health';
 
 // Tier 3+ repo mode + search
@@ -68,7 +57,7 @@ export { generateTestFailureTriage } from './preamble/generate-test-failure-tria
 // Preamble Composition (tier → sections)
 // ─────────────────────────────────────────────
 // T1: core + upgrade + lake + telemetry + voice(trimmed) + completion
-// T2: T1 + voice(full) + ask + completeness + context-recovery + confusion + checkpoint + context-health
+// T2: T1 + voice(full) + ask + completeness + context-recovery + confusion + context-health
 // T3: T2 + repo-mode + search
 // T4: (same as T3 — TEST_FAILURE_TRIAGE is a separate {{}} placeholder, not preamble)
 //
@@ -96,14 +85,11 @@ export function generatePreamble(ctx: TemplateContext): string {
     // (not interactive-gated); the text applies universally.
     generatePlanModeInfo(ctx),
     generateUpgradeCheck(ctx),
-    generateWritingStyleMigration(ctx),
-    generateLakeIntro(ctx),
-    generateTelemetryPrompt(ctx),
-    generateProactivePrompt(ctx),
-    generateFirstRunGuidance(ctx),
-    generateRoutingInjection(ctx),
-    generateVendoringDeprecation(ctx),
-    generateSpawnedSessionCheck(),
+    // Phase 2: the 8 one-time onboarding generators (lake-intro, telemetry-
+    // prompt, proactive-prompt, first-run-guidance, routing-injection,
+    // vendoring-deprecation, spawned-session-check, writing-style-migration)
+    // moved into bin/gstack-skill-start's instruction-emission layer — their
+    // text appears at runtime only when its gate fires (plan Q2/OV6/F5).
     generateBrainHealthInstruction(ctx),
     // AskUserQuestion Format renders BEFORE the model overlay so the pacing rule
     // is the ambient default; the overlay's behavioral nudges land as subordinate
@@ -112,14 +98,13 @@ export function generatePreamble(ctx: TemplateContext): string {
     ...(tier >= 2 ? [generateAskUserFormat(ctx)] : []),
     generateBrainSyncBlock(ctx),
     generateModelOverlay(ctx),
-    generateVoiceDirective(tier),
+    generateVoiceDirective(ctx, tier),
     ...(tier >= 2 ? [
       generateContextRecovery(ctx),
       generateWritingStyle(ctx),
       generateCompletenessSection(ctx),
       generateConfusionProtocol(ctx),
       generateEvidenceDirective(ctx),
-      generateContinuousCheckpoint(),
       generateContextHealth(ctx),
       generateQuestionTuning(ctx),
     ] : []),

@@ -58,13 +58,16 @@ const MANDATORY: Array<{ name: string; re: RegExp }> = [
  * these into a section (they fire only once the section is loaded), but they
  * must never be DROPPED. Asserted against the skeleton+sections union. */
 const PER_SKILL_RULES: Record<string, RegExp[]> = {
-  'plan-ceo-review': [/One issue = one AskUserQuestion call/i],
-  'plan-eng-review': [/One issue = one AskUserQuestion call/i],
+  'plan-ceo-review': [/One decision unit = one AskUserQuestion call/i],
+  'plan-eng-review': [/one\s+question object for one choice/i, /independently selectable changes separate IDs/i],
   'plan-design-review': [/One issue = one AskUserQuestion call/i],
-  'plan-devex-review': [/One issue = one AskUserQuestion call/i],
-  // /codex emits its recommendation as prose; the instruction MUST stay in the
+  'plan-devex-review': [
+    /One new or reopened decision = one AskUserQuestion call/i,
+    /Never combine independent decisions, including in separate question tabs/i,
+  ],
+  // /codex emits its recommendation as prose; the instruction must stay in the
   // always-loaded skeleton because codex has no on-demand section.
-  codex: [/Synthesis recommendation \(REQUIRED\)/i, /Recommendation\s*:\s*<action>\s*because/i],
+  codex: [/Synthesis recommendation/i, /Recommendation\s*:\s*<action>\s*because/i],
 };
 
 /** Discover every repo-root skill dir that ships a generated SKILL.md. */
@@ -107,7 +110,8 @@ const EXPECTED_INTERACTIVE = [
   'qa-only',
   'codex',
   'autoplan',
-  'cso',
+  // CSO uses a private startup and intentionally omits the shared PREAMBLE,
+  // including its generic AskUserQuestion formatting block.
   'investigate',
   'retro',
   'design-review',
@@ -151,8 +155,20 @@ describe('AUQ format is always-loaded (token-reduction safety net)', () => {
 
   // CARVE-SAFETY: for carved skills, the format block must be in the SKELETON,
   // not only a section. (The per-skill loop above already reads SKILL.md, so
-  // this is an explicit, named guard for the exact failure mode.)
-  for (const { skill, skillMd, sectionsDir } of skills.filter(s => s.sectionsDir)) {
+  // this is an explicit, named guard for the exact failure mode.) Keyed on the
+  // skeleton+sections UNION shipping the block at all: tier-1 carves (browse)
+  // never render AUQ format by design, so they have nothing to guard — but a
+  // tier≥2 carve that wrongly moved the block into a section still trips here.
+  const shipsAuqInUnion = (s: { skillMd: string; sectionsDir: string | null }): boolean => {
+    let union = fs.readFileSync(s.skillMd, 'utf-8');
+    if (s.sectionsDir) {
+      for (const f of fs.readdirSync(s.sectionsDir).filter(f => f.endsWith('.md') && !f.endsWith('.md.tmpl'))) {
+        union += '\n' + fs.readFileSync(path.join(s.sectionsDir, f), 'utf-8');
+      }
+    }
+    return /##\s*AskUserQuestion Format/i.test(union);
+  };
+  for (const { skill, skillMd, sectionsDir } of skills.filter(s => s.sectionsDir && shipsAuqInUnion(s))) {
     test(`${skill} (carved): AUQ format block lives in the skeleton, not only sections/`, () => {
       const body = fs.readFileSync(skillMd, 'utf-8');
       expect(body).toMatch(/##\s*AskUserQuestion Format/i);

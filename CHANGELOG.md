@@ -1,5 +1,2976 @@
 # Changelog
 
+## [1.91.93.0] - 2026-10-12
+
+**/cso release qualification gates on finished reports. Report completeness is still measured, but it no longer blocks a release.**
+
+- **Gate edit: `matchedCompleteMatrix` and `mandatoryReports` (scripts/cso-eval.ts).** Both gates used to require every report's helper completeness to be `complete`: no gap, and every domain assessed. The private corpus fixtures carry gaps by design. They have no workflow files for zizmor, their planted credentials are never tested live, `.env` is kept out of the sealed source, and gitleaks has no history to read. So no report could ever be `complete`, and no release could ever qualify. Both gates now require every report to be `finished`, on a complete, fully adjudicated matrix. A running, missing or failed report still fails them. Completeness stays its own measured rate: `reports` per group, and the evaluator's `completenessRates`. Garry approved this rule on 2026-10-11, choosing option (a). No threshold changed.
+
+## [1.91.92.0] - 2026-10-11
+
+**Outside reviews honor `codex_reviews` at the send, not in skill prose. Codex reasoning effort is a setting, and the README says what leaves your machine.**
+
+- **Consent in the binaries (#3102).** `gstack-codex-probe run-with-timeout`, `gstack-claude-code`, `gstack-outside-voice run` and the unattended `/autoplan` runner read `codex_reviews` before anything starts. When it is `disabled`, or the config can't be read, or the value is unknown, they refuse with `not_run` / `consent_missing` (exit 3). The refusal prints the fix command and links the `outside-review-consent-missing` troubleshooting anchor. `/ship` design-lite and `/design-review` no longer hard-code consent, so `codex_reviews=disabled` now stops them too. `/codex` and `/claude-code` pass `--user-invoked` because you asked for those reviews by name. `gstack-config get --stored <key>` prints `enabled`, `disabled`, `unset` or `unreadable` (exit 2).
+- **Reasoning effort (D1-A, #3098, closes #2934).** `run-with-timeout --effort <default>` uses `GSTACK_CODEX_EFFORT` first, then `gstack-config set codex_effort <level>`, then the gate's own default, and appends `model_reasoning_effort`. An invalid level stops before any Codex call. `/codex ... --xhigh` sets the env for that dispatch. `/spec` keeps `medium` inside its 120 s budget. `gstack-models list` shows the effective effort.
+- **Privacy text (#1081, #1080, #1150).** The README's Privacy & Telemetry section now lists:
+  - the telemetry fields and what is never sent
+  - the local `skill-usage.jsonl` (repo and branch are stripped before upload)
+  - the update check, which goes to GitHub
+  - outside-review egress and its first-send notice
+  - session markers and the timeline, which stay local
+
+  The telemetry prompt and the `gstack-config` header match it.
+
+Thanks @Lockyer228 (#3098) for the `GSTACK_CODEX_EFFORT` precedence and its probe tests, and @lubosxyz (#2934) for the original env override.
+
+## [1.91.91.0] - 2026-10-11
+
+**Review gates fail closed: a Codex reply that lists P1 findings is never `clean`, /autoplan survives a Claude Code auto-compaction, and a read-only /plan-eng-review finishes `DONE` instead of `BLOCKED` (Wave 9 lane B).**
+
+- **Outside-review severities (#3105).** `lib/outside-review-result.ts` now reads P0-P3 labels in label position for every gate that summarises a review, the `execution` gate behind `/codex` consult and challenge included: `**P1 — x**`, `**P1** — x`, `1. P2 — x`, a bare `P2 —`, `### P1` and table cells `| P1 |`, plus the label-position severity words that only `review`/`structured` read before. A P0-P3 token in label position that none of these forms reads (`## P1/P2 findings`) is `VERDICT: unverified` with the new reason `unparsed_severity`, an `UNPARSED: line N: "..."` line and its own troubleshooting anchor; parsed P0/P1 findings still win (exit 3) and print the unparsed line too. A reply whose last `Verdict:` line says `not ready` with no readable severity prints `FINDINGS: unspecified` and exits 3. Code fences and inline code are quotes, not labels; an unlabeled consult answer stays `clean`.
+- **Post-compaction journals (#3107).** Claude Code 2.1.293 writes the kept conversation again after an auto-compaction boundary: new uuids, relinked parents, zeroed usage, identical otherwise. The owned journal reader (`lib/claude-owned-journal.ts`) now collapses such a copy into its pre-boundary original for every record kind, so the publication guard no longer denies every phase entry with `tool_identity`, a copied `/autoplan` prompt no longer trips `init_own`, and a copied end turn plus typed prompt no longer disarms the guard. A copy that differs in anything else, or a duplicate with no boundary between, still fails closed.
+- **Read-only /plan-eng-review (#3106).** When the caller forbids writing the report or the review log, the review now follows **Report-back outcome**: it returns the full report and ledger labeled not persisted, records telemetry `success`, ends `DONE` with `PERSISTED: no`, and its last line is `PERSIST: <gstack-review-log command>` for the caller to run. No new completion status; a failed permitted save is still `BLOCKED`. With no saved Eng Review, /ship's readiness dashboard now says to run that `PERSIST:` line or rerun the review.
+
+Thanks @kolla23 (#3105)
+Thanks @kolla23 (#3106)
+Thanks @Mr-B-1 (#3107)
+
+## [1.91.90.0] - 2026-10-11
+
+**Windows checkouts stop breaking gstack's nested shell scripts on Linux, the timeline Stop hook repairs on Windows instead of timing out every turn, and the `/setup-gbrain` smoke test stops piping into `gbrain put`.**
+
+### What this means for you
+
+- **Nested scripts are LF everywhere (#3110).** `.gitattributes` pinned only the top-level `bin/` to LF, so Git for Windows (`core.autocrlf=true`) wrote skill `bin/` helpers, the Claude hook shims, `lib/cso/images/*` and `scripts/app/*` with CRLF. A Linux bash reading that checkout (a synced tree, WSL, a bind mount) failed with `set: pipefail: invalid option name`, and `/autoplan`'s publication hook exited 2, blocking every phase entry. Every tracked `#!` file now resolves to `eol=lf`.
+- **`./setup` repairs existing CRLF copies.** Pulling the new rule does not rewrite a file whose content did not change, so setup finds tracked files whose rule says LF but whose copy has CRLF and checks them out again as LF. A file you edited is left alone and named, with the command that rewrites it and keeps your edit (`docs/troubleshooting.md#setup-crlf-repair`).
+- **The timeline Stop hook returns at once and repairs (#3103).** Through Git Bash, `gstack-slug` took 2.2-2.8 s against the hook's 2 s budget, so on Windows the hook spent about 2.5 s on every turn and repaired nothing. It now reads the slug from gstack-slug's cache in-process (`GSTACK_PROJECT_SLUG` still wins). On a miss a hidden background process resolves the slug and repairs, one at a time under a lock, and a directory it cannot resolve is retried after 5 minutes instead of every turn.
+- **The `/setup-gbrain` smoke test writes the page to a temp file (#1675)** and runs `gbrain put "$SLUG" < file`, the shape gstack's other `gbrain put` instructions already use.
+
+### For contributors
+
+- `test/gitattributes-eol.test.ts` checks `git check-attr eol` for every tracked `#!` file and that no file git stores as binary is marked text (`*.icns` is now `binary`, since `scripts/app/*` would otherwise cover the app icon).
+- `test/setup-crlf-repair.test.ts` builds the broken state with a real `core.autocrlf=true` clone, runs setup's repair under the install registry lock, checks the repaired bytes and runs the hook.
+- `test/timeline-stop-hook-slug.test.ts` runs a copy of the hook against a slow stub `gstack-slug` and is force-included in the Windows lane. Native Windows latency is measured only if that lane runs it.
+
+Thanks @Mr-B-1 (#3110)
+Thanks @Peaky8linders (#3103)
+Thanks @ElliotDrel (#1675)
+
+## [1.91.89.0] - 2026-10-11
+
+**Windows installs stuck on the Git Bash hook false positive get a one-line recovery, the auto-updater stops trusting only its own checker, and setup can no longer delete the checkout it runs from.**
+
+Since 1.91.31, `gstack-hook-check` on Windows (Git Bash) reported every TypeScript hook as `bun could not bundle the TypeScript entry`: Git Bash hands native Bun `C:/…` paths while the checker looked them up as `/c/…`. Setup refused the hooks, and team-mode auto-update held every later release because it re-checked each one with the broken installed checker. Code on main cannot reach those installs, so the troubleshooting page their messages link to now carries the recovery.
+
+### What this means for you
+
+- **Stuck on Windows?** Run `cd ~/.claude/skills/gstack && git pull --ff-only --autostash && ./setup` (your install directory if it differs). It clears the setup refusal, the held auto-update and `/gstack-upgrade`'s `is not a gstack checkout` refusal. `docs/troubleshooting.md#auto-update-hook-does-not-parse` and `#setup-hook-does-not-parse` say so instead of "Nothing to do locally".
+- **The hook check reads both path spellings.** Bun's entry, input and error paths are mapped back to Git Bash's spelling, so healthy hooks pass and a real syntax error still fails with its own file and line.
+- **One checker bug can't hold every release again.** The auto-updater runs the incoming release's own `bin/gstack-hook-check` on the extracted archive. Only a verified, complete report counts; a crash, empty output or unreadable report falls back to the installed checker, and when neither gives one the update is held as `hook-check-unavailable` with the fix command. A pass the installed checker disputes is logged as `HOOK_CHECK_DISAGREE`.
+- **`/gstack-upgrade` and `/spec` work in Git Bash.** Their checkout-root guards check `git rev-parse --show-prefix` instead of comparing `--show-toplevel` (`C:/…`) with `pwd -P` (`/c/…`); a static test rejects the old comparison in skill bash.
+- **`/review` and `/ship` record a start in a linked worktree on Windows.** `gstack-wtree` treats Git for Windows' `C:/…` `--git-path` answers as absolute (#3101).
+- **Setup never replaces a runtime root that holds its own checkout (#3084).** With the checkout at `~/.cursor/skills/gstack`, `./setup --host cursor` used to swap the Cursor runtime root in over it and delete it. Setup now refuses before writing anything (and again in `_activate_runtime_root`, which every host arm that swaps a root goes through; Kiro, which writes into its root in place, is refused too), prints the commands that move the checkout out, and `./setup --status` suggests that move instead of the destructive command. The install summary says "previous install was left in place" only after checking that the checkout, skills directory and runtime root still exist.
+
+### For contributors
+
+- `bin/gstack-path-spelling.sh` (shell spelling, native spelling, same-path, absolute, within) and its TS twin `lib/path-spelling.ts` own the `/c/…` vs `C:/…` class; only this release's call sites moved to them.
+- The Windows lane force-includes `test/setup-hook-syntax-gate.test.ts`; `windows-setup-e2e` runs the hook check on the checkout, the upgrade guard, and the documented recovery from a release with the false positive.
+
+Thanks @yuriysan (#3112)
+Thanks @szsunyuan (#3108, #3128)
+Thanks @dmfrede (#3101)
+Thanks @skleinbe-ny (#3088)
+Thanks @bkermen (#3100)
+Thanks @andrewkjankowski (#3084)
+
+## [1.91.88.0] - 2026-10-11
+
+**Transcript ingest lands on gbrain 0.60, and `/retro global` counts every Claude Code session in its real repository.**
+
+- **Transcript sources get a checkout (#3097).** gbrain 0.60's managed persistence refuses any import into a source with no active worktree binding on this host, and gstack registered every transcript source path-less, so every transcript page was refused (`owner_unavailable`) on every run. On a managed brain each transcript source is now bound to its own checkout, `<state root>/gbrain-transcript-sources/<source-id>/`, created by gstack as a git repository of its own (so gbrain binds that directory and never an enclosing checkout such as a brain-synced state root). A path-less source an earlier run registered is bound on the next run, the same way `gbrain sources add <id> --path` attaches a path to it; a resumed timeout checkpoint is admitted the same way before it imports. After each import the checkout holds one commit, the current page files, amended in place with no reflog so `git gc --auto` prunes old snapshots; it stays uncommitted while any page in the source lacks its file, so `gbrain sync` of the source can never soft-delete those pages. gstack never binds a source someone else holds (another host, or another directory on this host) and prints the owner, the inspect command and the release or re-bind commands, and it binds nothing under an ephemeral state root (`GSTACK_EPHEMERAL=1`). Classic (unmanaged) brains keep path-less sources, unchanged.
+- **global-discover reads the session's own cwd (#1315).** Claude Code project directories were decoded by turning every `-` into `/`, which fails for every hyphenated path, and the cwd fallback read a 64 KB prefix that recent sessions' first record outgrows. Each session's cwd is now read from its own JSONL, whole lines up to 1 MiB (a longer line is skipped and counted in a warning), and resolved through git to its worktree root: root and subdirectory sessions count the same, linked worktrees count with their repository, a nested repository counts as itself, and sessions outside a repository are not counted as one.
+
+Thanks @Simba3696 for the root-cause diagnosis (#3097).
+Thanks @Akagilnc for the two-bug diagnosis and measurements (#1315).
+
+## [1.91.87.0] - 2026-10-11
+
+**The paid CSO producer gives `/cso` the Agent tool users have, so independent review and repair verification can run in the evaluation. The producer's receipt now counts subagent tokens.**
+
+The current-skill smoke reports (run 38090891646) said repair verification was "not performed": `record-review` refused the review with "Repair review must be explicitly independent". The producer started Claude with `--tools Bash,Write`, so the Agent tool was missing. `/cso` could start no independent reviewer, honestly declined to attest independence, and so every repair stayed `not_attempted`. Users' Claude Code has the Agent tool. The v2 skill's parallel finding verification uses it too, and fell back to self-verification in the v2 baseline for the same reason.
+
+### What this means for you
+
+- **The producer allows `Bash,Write,Agent`.** Subagents inherit the whole policy. Claude Code 2.1.263, replayed against a mock API through the real producer, shows this in practice:
+  - A subagent has only Agent, Bash and Write, and no MCP servers.
+  - Its launcher calls run unsandboxed and reach Docker. Its other Bash is denied, including chained, path-variant and `dangerouslyDisableSandbox` commands.
+  - `--restricted` keeps its Write calls inside the producer's work and helper directories.
+  - Read, WebFetch, ListMcpResourcesTool and `mcp__*` tools are unavailable to it.
+  - A subagent's `record-review` is accepted (`self_attested`), and `verify` then passes the review check.
+- **Policy revision `claude-2.1.263-cso-v2`.** The tool set changed, so the producer policy identity changed with it. A recorded v2 baseline bound to `cso-v1` no longer matches, and the baseline must be measured again under this policy.
+- **Subagent tokens are counted.** A `result` event's `usage` covers only the main thread's last turn. The receipt now takes the session total from `modelUsage` and sums turns across every `result`. A background subagent gives the main thread a second result. A killed run also counts the subagent messages it streamed.
+
+### Itemized changes
+
+#### Changed
+- `test/helpers/providers/claude.ts`: `--tools Bash,Write,Agent` (`CLAUDE_PRODUCER_BUILTIN_TOOLS`). `assertClaudeProducerSandboxPolicy` also pins `--tools`, `--permission-mode dontAsk` and exactly one each of `--restricted`, `--safe-mode` and `--strict-mcp-config`. It refuses `--mcp-config`, `--agents`, `--plugin-dir`, `--setting-sources`, `--disallowed-tools` and the permission-bypass flags.
+- `test/helpers/providers/claude-stream.ts`: tokens from `modelUsage`, turns summed over results, subagent messages counted once by message id, and only main-thread text kept as a killed run's output.
+- `scripts/cso-eval-producer.ts`: Claude policy revision `claude-2.1.263-cso-v2`.
+
+#### For contributors
+- `test/provider-model-defaults.test.ts`: the tool list and each new policy refusal.
+- `test/claude-producer-stream.test.ts`: subagent accounting with the event shapes Claude Code 2.1.263 printed in the replay, including a background subagent's second result and a killed run.
+
+## [1.91.86.0] - 2026-10-11
+
+**browse follows the proxy your shell already uses, writes PDFs on Windows machines whose temp dir is an 8.3 short path, and stops spawning `--config=NUL` children that crashed Bun 1.3.10 (Wave 9, lane E).**
+
+### What this means for you
+
+- **Proxy from the environment (#915).** Without `--proxy`, browse takes the proxy from `BROWSE_PROXY_URL`, then `HTTPS_PROXY`, `HTTP_PROXY` and `ALL_PROXY` (upper case before lower case). `BROWSE_PROXY_URL=direct` opts out. `NO_PROXY` becomes Chromium's bypass list, and loopback is always bypassed. The proxy and the `NO_PROXY` rules are part of the daemon config, so a session with a different environment is refused with the variable named instead of silently reusing a daemon that routes differently. The refusal offers `browse stop`, which now stops any daemon whatever its proxy or headed settings. A standard variable that doesn't parse (curl-style `host:port`) prints a warning and browse connects directly; a bad `--proxy` or `BROWSE_PROXY_URL` still fails, so a typo never quietly exposes your IP. `socks5h://` works as `socks5://`. See BROWSER.md, "Proxy from environment".
+- **8.3 temp paths on Windows (#3104).** `make-pdf` and `browse pdf` failed with `Path must be within: C:\Users\BURCIN~1\...` because the safe directories and the target went through different realpath functions. Both sides now use one (`fs.realpathSync.native`), resolved paths compare exactly, and only a tail that doesn't exist yet is case-folded on Windows.
+- **No more Bun crash windows on Windows (#3085).** The terminal agent, the native-cookie supervisor and its worker passed `--config=NUL`, which panicked Bun 1.3.10 at flag parsing; the respawn loop turned that into a crash window every few seconds. All three now get an empty `bunfig.toml` created in a private directory and re-checked to be zero bytes before each spawn. POSIX keeps `/dev/null`.
+
+### Itemized changes
+
+#### Changed
+- `browse/src/proxy-config.ts`: `resolveProxy` (precedence, `direct`, cred policy for env URLs, warning fallback), `noProxyToChromiumRules`, `withLoopbackBypass`, `serverProxyEnv`; `socks5h` accepted as `socks5`; `computeConfigHash` takes the `NO_PROXY` rules (unchanged hash when there are none).
+- `browse/src/cli.ts`: resolved proxy source and bypass reach every server launch (start, crash restart, headed connect and its supervisor); the startup line names the source; `proxyMismatchLines` refusal; `browse stop` skips the config-mismatch check.
+- `browse/src/server.ts`, `browse/src/browser-manager.ts`: Chromium gets the bypass rules; the state file records the redacted proxy, its source and its bypass.
+- `browse/src/path-security.ts`: `resolveRealPath`, one realpath for safe directories and targets. `browse/src/write-commands.ts`: `cookie-import` uses `validateReadPath`.
+- `browse/src/bun-child-config.ts`: `emptyBunConfig()`; `bunChildFlags()` replaces `BUN_CHILD_FLAGS`.
+
+#### For contributors
+- `browse/test/proxy-env.test.ts`, `browse/test/proxy-env-daemon.test.ts` (a local proxy across launch, reuse, a NO_PROXY-only change, `direct` and restart), `browse/test/path-security-realpath.test.ts`, `browse/test/bun-child-config.test.ts`.
+
+Thanks @ningfeemic-dev (#916)
+Thanks @bkermen (#3104)
+Thanks @adammartin0087 (#3085)
+
+## [1.91.85.0] - 2026-10-11
+
+**`/cso` works on Windows Git 2.56 and gets Docker on macOS, `/test-audit` and `/ship` loop correctly under zsh, and the deploy skills stop at the honest point (Wave 9 Lane D).**
+
+- **`/cso` on Git for Windows 2.56.** Every CSO Git child, and the eval fixture and producer identity reads, now set `GIT_CONFIG_GLOBAL=/dev/null` on every platform. Git 2.56 rejects `NUL` there ("unable to access 'NUL'"), so `/cso` could not read any repository on Windows and `doctor` reported `static-snapshot: missing`. `GIT_CONFIG_NOSYSTEM=1` stays, POSIX is unchanged, and a new free test that also runs in the Windows CI shards proves `git config --global --list` is empty under the CSO environment. Thanks @Alfabit7 (#3082).
+- **`/cso` admits the local Docker socket on macOS.** Bun's `realpathSync` opens its target to resolve it, and a Unix socket throws `EOPNOTSUPP`, so every macOS run rejected Docker and fell back to static-only. On exactly that error the socket path is now resolved without opening it (canonical parent plus `lstat`/`readlink`); the endpoint must still be a local `unix://` socket pinned by device and inode, TCP and SSH endpoints are still rejected, and Linux takes the unchanged path. The registry-broker socket mount uses the same resolver. Thanks @nathanshox (#3094).
+- **zsh-safe file loops.** `/test-audit`'s near-duplicate seed and `/ship`'s base-control fixture copy looped with `for f in $VAR`, which zsh (the Bash tool's shell on macOS) runs once with the whole list. Both now split the list explicitly, and a static test rejects any generated bash block that loops over an unquoted variable. Thanks @vilano93 (#3109).
+- **`/setup-deploy` stops when nothing is live yet.** The deploy-trigger question separates "nothing is deployed yet" from "this project never deploys". The first stops and writes nothing, telling you to bring the site up with the platform's own tool and re-run `/setup-deploy`; the second still records the `none` configuration. Thanks @mikehasa (#3095).
+- **`/land-and-deploy` runs a recorded command trigger only with approval.** When Deploy Configuration records a command as the deploy trigger, Step 5 says production has not moved, names the command and asks you to run it, or runs it only with your explicit approval, before polling for a deployment tied to the merge; a zero exit is not revision proof. Thanks @mikehasa (#3096).
+- **TODOS.md** records the Wave 9 triage: the remaining open P2/P3 bugs by area with their root-cause files and sizes, the parked items (#2118, #2623, #3061, #3084's legacy Cursor folders, #1315's session wording, the `gbrain put` stdin pipe from #1675) and the 73 feature requests grouped into twelve themes with counted demand.
+
+## [1.91.84.0] - 2026-10-11
+
+**A paid CSO baseline can be scored, and it measures what audits found. Three producer/scorer mismatches made gstack's own collect reject every real producer receipt from the first full baseline. Collect and score now accept real receipts of every kind, a test feeds them through, and findings count from every finished report, with completeness kept as its own measured rate.**
+
+The first full paid v2 baseline produced 64 receipts and 64 judge records, then scored `unmeasured` with `INVALID_PRODUCER_RECEIPT`. Run against that run's retained artifacts, collect failed on three separate mismatches in turn:
+
+1. **Artifact order.** The producer sorted its artifact inventory with `localeCompare`, so `package.json` came before `README.md`. Collect required strict code-unit order, and 62 of 64 receipts failed.
+2. **Per-platform catalog bytes.** Next came `UNMATCHED_PRODUCER_INSTALLATIONS`. Each platform's producer unit generated its own evaluation catalog, and `evaluation-candidate` stamps `qualifiedAt` with the current time. The two embedded catalogs differed only in that timestamp and the evidence digest over it.
+3. **Case-id namespace.** The last mismatch is in the private evaluator: judges named matched cases by their private id instead of the matrix's opaque id. The evaluator fixes it at its own boundary.
+
+### What this means for you
+
+- **Findings count from every finished report.** Before this, the scorer counted a cell's findings and runtime outcomes only when the helper report was `complete`, meaning no gap and every domain assessed. Real audits nearly always record some gap, such as no web advisory lookup or credential liveness left untested, so all 64 paid cells scored `partial` and the baseline found 0 of 32 seeded issues. `EvalResult` now carries a required `reportFinished` (helper status `finished`). Precision, recall, found seeded issues, runtime outcomes and tested repairs count from finished reports. A running or missing report still counts nothing, and neither does a report behind a failed producer receipt (a timeout, a failed post-run check, or output withheld for a credential), whatever the judge read there; that report also counts as not complete for the two gates below. Completeness is still measured on its own: each group reports `reports` (complete) and `finishedReports`, and the existing `mandatoryReports` and `matchedCompleteMatrix` gates still require complete reports. No threshold changed.
+- **Inventories are checked for unique paths, not order.** The order stays bound by the inventory's identity hash. New producers sort by code unit, so the identity no longer depends on locale.
+- **`evaluation-candidate --created-at <ISO time>`** pins every runtime's `qualifiedAt`. Builds given the same value write identical catalog bytes, so per-platform units embed the same catalog.
+- **`collectProducerReceipts(…, embeddedCatalogs)`** handles units that already embedded different catalogs. When the platforms' catalog hashes differ, it accepts them only if the supplied catalog bodies hash to each platform's `runtimeSha256`, validate, share revision and scanner identity, and are identical apart from `qualifiedAt` and the evidence digest. The batch then carries those bodies, and scoring re-checks them. Without bodies, or with any other difference, the result is still `UNMATCHED_PRODUCER_INSTALLATIONS`.
+
+### Itemized changes
+
+#### Changed
+- `scripts/cso-eval.ts`: `EvalResult.reportFinished` (required, implied by `reportComplete`, implies `reportPresent`) gates counted findings and outcomes. Groups add `finishedReports`. Collected scoring and `createEvalBaseline` count a failed receipt's result as neither finished nor complete.
+- `scripts/cso-eval-producer.ts`: artifact inventory sorted by code unit.
+- `scripts/cso-eval.ts`: `validateArtifactInventory` requires unique paths. `assertPlatformIdentities` accepts the catalog-equivalence proof. `ProducerBatch.embeddedCatalogs` is optional.
+- `scripts/cso-runtime-promotion.ts`: `evaluation-candidate` takes an optional `--created-at`. Documented in `docs/cso-release-qualification.md`.
+
+#### For contributors
+- `test/cso-eval.test.ts`: finished partial reports count findings while the completeness gates still fail. Running and missing reports count nothing. A baseline finds a seeded issue in a finished partial report and never in a running or missing one.
+- `test/cso-eval.test.ts`: in the real-receipt baseline, a seeded issue is found exactly where the vulnerable cell's receipt succeeded.
+- `test/cso-eval.test.ts`: real producer receipts, one per kind (succeeded, span-redacted, credential-withheld, timeout, post-run check failure), with mixed-case helper artifacts, go through collect, `createEvalBaseline` and `scoreCollectedEval`. Locale-ordered inventories are accepted and duplicate paths rejected. Catalog equivalence passes with the bodies and fails without them, with a body missing, duplicated, or with a moved image.
+- `test/cso-runtime-promotion.test.ts`: two `evaluation-candidate --created-at` builds write identical bytes.
+
+## [1.91.83.0] - 2026-10-11
+
+**gstack ships itself under `stamp-at-merge`.** `.gstack/ship-policy.json` flips `queue_mode` to `stamp-at-merge`, `bump` to `patch` and names `garrytan` under `maintainers`. The version is now allocated once, when the PR is next in the queue (`gstack-restamp --next --expect-base --expect-order`), instead of claimed at open and re-slotted on every reorder; every bump is PATCH, so unattended ships never meet the MINOR/MAJOR prompt; and `/review` contributor mode reads the maintainer set from the file instead of calling the collaborators API. `docs/ship-policy.md` gains the queue-side procedure: what a PR carries before its stamp, who runs the restamp and when, and what the merging thread verifies on the exact SHA instead of "VERSION above main".
+## [1.91.82.0] - 2026-10-11
+
+**Plan-review reality rows name their inputs.** The `{{PLAN_REALITY_ROWS}}` prose in plan-eng-review, plan-ceo-review and the autoplan CEO/Eng phases wrote `gstack-plan-reality check --phase <p> <review>` without saying what `<review>` is, and the completion summary cited a `PLAN_REALITY` line no step produced. The check now reads `<review-file|->` (the review you wrote, or stdin) and says it prints the `PLAN_REALITY:` line the summary cites. Found by the plan-eng-review workflow judge on an unrelated PR (clarity 3 / actionability 3 median, both citing these two references).
+
+## [1.91.80.0] - 2026-10-11
+
+**`/eval-plan` prices its default arms out of the box.** `lib/pricing.ts` gains verified rows for `claude-opus-5-5` ($4 / $20 per MTok, cache reads $0.20; Anthropic list prices effective 2026-10-07) and `gpt-6.1-sol` ($2 / $10 per MTok, cached input $0.10; OpenAI model page, standard tier), the two models `gstack-models resolve --role eval-arms` returns under the default `smart` implementation tier. `gstack-eval-plan arms` previously exited `EVAL_PRICE_MISSING` for both; the fail-closed rule is unchanged, only the data was missing.
+
+## [1.91.79.0] - 2026-10-11
+
+**`/eval-plan` preregisters paid evals for your product, coordination tools keep parallel lanes from colliding, and the autoplan owner sees a one-page brief instead of the full review (multi-agent wave PR E, plan items E1 tier 1, E2, E3).**
+
+- **`/eval-plan` (tier 1).** `gstack-eval-plan checklist` renders the preregistration checklist (bars, arms, decoys, stop rules, held-out exposure); `dry-run` runs the `$0` stub model over real input shapes and checks the price-table row, the output budget for reasoning models and the retry prompt's actual text; `pilot` runs n≈3 through `lib/spend-ledger.ts` and prints the extrapolation with an error band before the approval ask; `arms` resolves `gstack-models resolve --role eval-arms`. `PRICING` moves to `lib/pricing.ts` with its excluded billing categories documented; a model without a verified row fails closed with `EVAL_PRICE_MISSING`. Tier-3 steps are named in the skill as `tier 3, after P7`.
+- **Coordination.** `gstack-lane-check` diffs in-flight branches and PRs against planned files and reports each intersection with the PR number and hunk count (`LANE_CONFLICT`). `gstack-evidence verify <bundle>` reruns probes and marks each claim `verified` or `unverified`. `{{COORDINATOR_CONTRACT}}` (merge conditions, behavior-change notices, spend caps, handoff format) renders into autoplan and the spec `--execute` spawn, and `gstack-autoplan contract` prints the identical bytes. `scripts/ubicloud/ubi-runner.sh` tags VMs by owner, adds `list --mine`, `usage`, `records` and own-VMs-only `gc`, and records a VM before creating it. `test_backend` (`local` | `ubicloud`) joins the config and the doctor `cores` row recommends `ubicloud` under 8 cores. Ship gains the Step 18-H no-PR handoff section; cross-thread messages carry full thread ids.
+- **What the owner sees.** autoplan Phase 4 writes `review-record.md` and presents `gstack-owner-brief render`: the `URGENT, outside this plan` block first, a plain summary, then the numbered decisions seven per page with stable ids, `auto` items showing the default taken and `approval` items pending; `close --plan` rewrites every `draft direction stands until the owner decides` line to the decided option and date. `/review --contributor` (auto-detected via `gstack-contributor-mode detect`: `maintainers` in `.gstack/ship-policy.json`, else push permission, else off, source recorded) reviews outside PRs as evidence first with an accept/supersede/decline table and emits credit lines only when a diagnosis or test carried over. `gstack-banned-terms check` runs on every `/review` and `/document-release` diff from `.gstack/banned-terms.json`, naming the term, file and allowed locations.
+
+## [1.91.78.0] - 2026-10-11
+
+**Plan reviews check reality before they check taste, `/review` and `/cso` look sideways from every finding, and `/investigate` ships recipes for flakes, polluters, races, eval bisects and backlog triage.**
+
+Multi-agent wave PR D (`docs/designs/MULTI_AGENT_WAVE_2026_10_10.md`, items D1–D3). The reviews of this wave's own plan found that the most expensive mistakes were premise errors (a file:line that did not say what the plan claimed, a thing already built, a number nobody re-derived), so those checks are now rows every plan review must fill.
+
+### What this means for you
+
+- **Reality rows in plan reviews.** `plan-ceo-review`, `plan-eng-review` and `/autoplan` render one `REALITY: <row> pass|finding|n/a <summary> <file:line>` line per row: premise table (every factual claim with a receipt; `unverified=<n>` is scored), already-done, surface check, binding decisions, numbers re-derived from raw data, deferred asks, PR count. Eleven tier-2 rows (db, perf, search, incident, dependency) load only under `--scope`. `bin/gstack-plan-reality rows|check` prints the applicable rows and the verdict line `PLAN_REALITY: phase=… rows=n/m missing=… verdict=complete|incomplete|repair`; an unattended run with a missing row is `incomplete`, never a warning (`REALITY_ROW_MISSING`, `REALITY_RECEIPT_MISSING`). Each tier-1 row ships with a positive fixture taken from this wave's own review record and a decoy.
+- **Sideways review.** `/review` Step 4 greps every finding's pattern at every other ingress, command and call site, takes the worst sibling's severity, and forces CRITICAL for data loss, trust-boundary bypass and uncapped spend (vocabulary unchanged: CRITICAL/INFORMATIONAL, no lane downgrades). The checklist names the shapes to sweep: siblings, caches in front of guarded or metered calls, static→dynamic imports, parity claims, pool queries inside a caller's transaction, test-only flake fixes. The Scope Check gains `Diff read: full|partial` and `Undeclared behavior changes:`; CLEAN counts as approved only after a full read. The flake-fix rule (`P(fail | regression)` before and after, else RH-15) is shared with `/investigate`. `/cso` Phase 12 does the sibling sweep only.
+- **Investigate recipes.** `/investigate` gains an `## Arguments` table and five carved sections: flake (reproduce on main in a worktree, failed/N, forced probe, never loosen, paid evals never retried, required `## Flake evidence`), polluter (CI-order bisect, `POLLUTER:` line), race (probes, forced interleaving, `Promise.allSettled` writer template), eval-bisect (distinct revisions, cached cheap scorer, detached runs with the sentinel) and backlog (`--backlog`: `still_open` needs a run repro, `already_fixed <commit>`, `partially_fixed`, `owned_elsewhere`, contributor PRs as evidence only). Phase 1 adds call-sites-before-duplicates and `git update-index --refresh` before timing git in a worktree (also in `/benchmark`).
+
+### Itemized changes
+
+#### Added
+- `lib/plan-reality.ts`, `bin/gstack-plan-reality`, `scripts/resolvers/plan-reality.ts` (`{{PLAN_REALITY_ROWS}}`); `scripts/resolvers/sideways.ts` (`{{SIDEWAYS_SWEEP}}`, `{{FLAKE_FIX_NUMBER}}`); `investigate/sections/{manifest.json,flake,polluter,race,eval-bisect,backlog}.md`; fixtures `test/fixtures/multi-agent-wave/reality-rows.json` (+15 `INCIDENTS.md` rows); two result codes with troubleshooting anchors.
+
+#### Changed
+- `scripts/resolvers/plan-gates.ts` (review mode): `Diff read`, `Undeclared behavior changes`, full-read approval rule; ship's byte-pinned plan-completion untouched.
+- Templates: plan-eng-review Scope Challenge + deep incident table, plan-ceo-review 0A/0B + Completion Summary, autoplan ceo/eng phases + Pre-Gate table, review Step 4 + checklist, cso Phase 12, investigate skeleton, benchmark Phase 1. `CARVE_GUARDS` gains `investigate`; caps refreshed with measured ratios (plan-ceo-review +960 B, plan-eng-review +3,794 B, autoplan +851 B, review +923 B replacing the enum paragraph, cso +51 B; qa and ship untouched).
+
+#### For contributors
+- New tests: `test/plan-reality.test.ts` (18), `test/sideways-review.test.ts` (8), `test/investigate-recipes.test.ts` (9); `test/skill-fixture.test.ts` pins the sideways paragraph as its extraction anchor.
+- Not in this release: `gstack-autoplan submit` does not yet call `gstack-plan-reality check` itself (the runner landed in parallel); a parent loop runs the check before `submit`. Automatic tier-2 scope detection waits for the runner's scope set to grow beyond `ui`/`dx`.
+
+## [1.91.77.0] - 2026-10-11
+
+**`/ship` now runs a two-stage pre-gate before anything paid, regenerates generated files from a committed registry, and links issues only on explicit intent (multi-agent wave C-pregate, plan items C4, C6, C8 tier 1).**
+
+- **`gstack-pregate` (`lib/pregate/*`).** Stage 1 is the mechanical preflight (`regen`, `secrets`, `strays`, `literals`), stage 2 runs the test lanes the touched files select, with a separate clock each; results record the tree identity they ran against and go stale when the tree moves, so `gstack-ship-receipt write --pregate` refuses on `PREGATE_STALE`, `LANE_FAILED`, `INCOMPLETE` or `REMOTE_UNCLEARED` and writes nothing. Lanes come from the repo's own workflow files; a lane this machine cannot run becomes a persisted `requires-remote` obligation cleared with `gstack-pregate clear --run-url`. `secrets` and required lanes cannot be downgraded in `.gstack/pregate.json`; repo-declared commands run only from `/ship` or with `--allow-repo-commands`, otherwise the check is `incomplete`, never `pass`.
+- **`gstack-regen` + `.gstack/generated.json`.** `check` runs each registered generator in a scratch worktree and diffs the outputs; `write` records sha256 pre/post; gstack registers `skill-docs` and `ship-goldens` (`scripts/gen-ship-goldens.ts`).
+- **`gstack-issue-links`.** `Fixes #N` only from a `Fixes`/`Closes`/`Resolves` trailer or `--issue`; bare mentions, partial work and cross-repo references render as `Refs`; an unreadable closure issue downgrades to `Refs` with `ISSUE_UNREADABLE`; `--ci-run <id>` adds `Flake: #N (run <id>)`. Step 18 renders the `## Issues` section from it.
+- **Step 5 lane example** collects every background lane's PID under `set -o pipefail` and fails on any non-zero exit, so a `| tail`-hidden failure can no longer pass.
+- Tier 2 checks (`guards`, `ratchets`, `lint`, `links`, `hermetic`, `patches`, `integrator`) are named in `docs/pregate.md` as a follow-up; 14 new result codes with troubleshooting anchors.
+
+## [1.91.75.0] - 2026-10-11
+
+**CSO paid producers no longer fail a successful audit because the final summary quoted the helper's own run ID. Credential-class text still withholds the output and fails the receipt, and the reason now names the matching redactor rules and counts.**
+
+In the first paid baseline both smoke cells finished their audits, then the producer marked each receipt `failed` with `Sensitive producer output or error withheld`. The producer treated any redactor match as a leak. A CSO run ID such as `<13-digit epoch>-<hex16>` matches `pii.phone.e164`, and some also match `pii.cc`. The fixtures' metadata address and a `PRIVILEGED` label also match. Replaying a mock provider through the installed producer, a summary of just "complete — assessed source in run <runId>." failed on 1.91.73.0 and succeeds now.
+
+### What this means for you
+
+- **Rule-named failures.** A credential-class match (the redactor's `secret` category) in the output, the error, or either concatenation still replaces the output with `[sensitive producer output redacted]` and fails the receipt. The reason is now `Sensitive producer output or error withheld: credential-class rule <id>×<count>, …` and never includes the matched text.
+- **Source canaries quoted bare.** Values assigned to credential-shaped names in the cell's verified source (the `env.kv` rule), such as a planted canary, are matched exactly, including across output and error. They fail as `source.env.kv`, because no pattern recognises such a value once it is quoted without its name.
+- **Helper identifiers survive.** Run and replay IDs, `cso-eval-<run>-<sha12>` catalog revisions, `<tool>-<hex16>-<hex16>` artifact IDs and hex finding, review and content IDs are set aside before the PII, internal and legal rules run. Those rules now replace their spans in place (`<REDACTED-<rule>>`) and no longer change the receipt status. Scoring reads the helper's report, and the evaluator still scans outputs for its canaries.
+
+### Itemized changes
+
+#### Changed
+- `scripts/cso-eval-output-redaction.ts` (new): `redactProducerText` and `sourceCredentialValues`. `sanitizeProducerRun` in `scripts/cso-eval-producer.ts` uses them; the source values are collected once after the source is sealed and validated.
+
+#### For contributors
+- `test/cso-eval.test.ts`: helper IDs kept with PII spans redacted in place; env-line and Anthropic-key outputs fail with their rule names; a source canary is withheld whole or split across output and error. The existing canary test now expects the rule-named reason.
+
+## [1.91.73.0] - 2026-10-11
+
+**"Ship, next in queue at <version>" with zero manual stamp edits: a committed repo ship policy, `gstack-restamp` that stamps a PR only when it is next to merge (and re-stamps after a reorder in one step), a tree receipt that proves the only change since the gate was the stamp, a portable evidence bundle, and a ship receipt in the PR body.**
+
+Reordering a release queue used to mean hand-editing VERSION, CHANGELOG headings, `(was X)` mentions and the lockfile on every PR behind the moved one, then re-running a full gate on a tree that differed only by those bytes. This release (multi-agent wave PR C-stamp) makes the stamp one command and the gate decision a receipt.
+
+### What this means for you
+
+- **`.gstack/ship-policy.json`** declares the repo's bump policy, `queue_mode` (`claim-at-open` or `stamp-at-merge`), `release_tool` and its allowed outputs, `stamp_paths`, CHANGELOG rules, mirror, history policy (`merge-only`), preregistration SHAs, stamp-sensitive gates, PR count and maintainers. `bin/gstack-ship-policy init|validate|show-effective|check-history` reads it from `origin/<base>` (never the working tree silently; `POLICY_SOURCE_UNAVAILABLE` on a shallow checkout); a policy that only exists on the branch is labeled `head (unreviewed)`. Commands the policy names run only under `--allow-repo-commands` or inside `/ship`; a refusal happens before any write and says `nothing written`. `docs/ship-policy.md`; `.gstack/ship-policy.example.json`.
+- **`bin/gstack-restamp --version X | --next | --after <pr>`**: under `stamp-at-merge`, `--next` is the base's configured version source plus the policy bump (claims ignored); `--expect-base <sha>` and `--expect-order <pr,...>` re-validate right before merge and return `QUEUE_STALE` with the exact recomputation command when either moved; `--after <pr>` builds the gate-ahead merge in a throwaway worktree, stamps relative to the predecessor and records its head and the evidence branch key in `.gstack/tmp/gate-ahead.json`, leaving the PR branch's history untouched. The release tool runs in a staging worktree against an enumerated allowed-output set with preimages and postimages; every stage is journaled (`.gstack/tmp/restamp-journal.json`) so a failure resumes or rolls back, and a rollback refuses to overwrite a later user edit (`RESTAMP_CONFLICT`). Idempotent; `--dry-run` prints the full diff and writes nothing. Stamp rewriting is provenance-based: `(was X)`, `since: X` and `vX` are rewritten only where they are the branch's own tentative stamp, so a dependency pin that equals the old version is never touched.
+- **`bin/gstack-tree-receipt`** compares committed heads hunk by hunk with per-file-type rules (version file, manifest version, lockfile root `version` keys only, CHANGELOG heading move, exact stamp patterns) and prints `TREE: same-modulo-stamps` or `TREE: changed (<paths>)` plus `gate-reuse: eligible` or `not-eligible (<what changed>) — fix: …`. Equivalence is per gate: lanes the policy marks stamp-sensitive always rerun. `PREDECESSOR MOVED <old> -> <new>` refuses reuse when the gate-ahead predecessor moved.
+- **`gstack-evidence bundle`** exports comparison material, the required-lane manifest, executed selections, run URLs, outcomes, hashes and execution identity (runtime, normalized lockfile hashes, CI workflow tree, runtime pins, runner image), distinguishing verified from imported lanes; a coordinator on a fresh machine reads it after the gate VM is gone and reuse is refused when identity is unknown. `gstack-evidence ancestor` checks preregistration SHAs are ancestors (`PREREGISTRATION_NOT_ANCESTOR`).
+- **`bin/gstack-ship-receipt write|read --pr|census`** writes the fenced, schema-versioned ship receipt as the first block of the PR body (session kind, tree verdict, gate reuse, policy, queue mode, preregistration, history, artifacts consumed) and `census --repo --since <tag>` computes the adoption number over merged PRs, deduplicated by run and thread against a cohort file.
+- **`/ship`**: Step 3 prints the policy and history lines, Step 12 under stamp-at-merge calls `gstack-restamp` and never asks for a version when the policy says `bump patch`, Step 16 consults the tree receipt per lane and leaves `--force-gate <reason>` to the coordinator, and the PR body opens with the receipt. gstack's own policy is committed (`bump ask`, `claim-at-open`, `release_tool: bun scripts/gen-agents-digest.ts`).
+
+### Itemized changes
+
+#### Added
+- `lib/ship-policy.ts`, `lib/restamp.ts`, `lib/changelog-check.ts`, `lib/tree-receipt.ts`, `lib/evidence-bundle.ts`, `lib/ship-receipt.ts`; `bin/gstack-ship-policy`, `bin/gstack-restamp`, `bin/gstack-tree-receipt`, `bin/gstack-ship-receipt`; `gstack-evidence bundle|ancestor`; `.gstack/ship-policy.json`, `.gstack/ship-policy.example.json`, `docs/ship-policy.md`; 22 result codes with troubleshooting anchors (`POLICY_*`, `QUEUE_STALE`, `RESTAMP_*`, `CHANGELOG_*`, `GATE_REUSE_NOT_ELIGIBLE`, `EVIDENCE_*`, `PREREGISTRATION_NOT_ANCESTOR`, `HISTORY_POLICY_VIOLATION`, `RECEIPT_*`).
+
+#### Changed
+- `lib/headless-artifacts.ts` ship-receipt schema extended (thread, tree enum, gate_reuse, policy, queue_mode, preregistration, history); `gstack-artifact validate --as ship-receipt`.
+- `ship/SKILL.md.tmpl` Steps 3, 12, 16 and `ship/sections/pr-body.md.tmpl`; union bytes +462 (1,937 headroom) paid for by condensing unpinned sentences and moving queue and receipt instructions into `gstack-ship-policy show-effective`'s `ship:` lines and `gstack-restamp`'s `next:` line. Four ship goldens regenerated.
+
+#### For contributors
+- New tests: `test/gstack-ship-policy.test.ts`, `test/gstack-restamp-queue.test.ts` (three PRs reordered twice with zero manual edits, injected failure after every stage, concurrent-edit conflict, squash-history gate-ahead, `QUEUE_STALE`, release tool writing outside its allowed set, metadata-only lockfile change, version-source shapes), `test/restamp-command-boundary.test.ts`, `test/tree-receipt-stamp-sensitive.test.ts` (including the dependency-pin negative fixture), `test/evidence-bundle-portability.test.ts` (fresh clone, empty state root), `test/gstack-ship-receipt.test.ts`; fixture helper `test/helpers/restamp-fixture.ts`.
+- Not in this release: the policy's `mirror` is parsed and validated but its stage prints `skipped (no mirror in policy)` (tier 2); C4 regen registry, C6 issue links and the C8 pre-gate follow in C-pregate.
+
+## [1.91.72.0] - 2026-10-11
+
+**`/autoplan` runs unattended end to end: `gstack-autoplan next|submit` drives the review phases as a durable state machine for a parent agent, the outside voice is a pluggable runner (Codex CLI, API, or a cross-family host subagent), review phases load a short checklist instead of the whole methodology, and the spec-review loop stops honestly at its cap.**
+
+B-core (1.91.70.0) gave gstack the artifact contract and the `unattended` session kind; this release (multi-agent wave PR B-runner) is the loop that produces those artifacts on a machine with no Claude Code harness.
+
+### What this means for you
+
+- **`bin/gstack-autoplan next --out <dir>`** prepares the current phase (snapshot, methodology, prompt), persists the dispatch intent with an attempt id, prints the voice, prompt path, expected result path and required model family, and exits `GSTACK_RESULT: status=awaiting_result`. The parent dispatches the reviewer (a subagent, Codex, or an API call) and returns the result with **`submit --phase --voice native|outside --result <file> --model <id> --attempt <id>`**, which validates the full-read receipt, canonical findings and model family, binds the hash into `run.json` atomically, reconciles both voices and closes the phase. `status`, `export`, `answer --gate-rev --reply`, `resume` and `run` complete the verb set. A stale, unparsed or conflicting reply writes nothing; a non-recommended answer that changes reviewed content reopens only the affected phases with Eng last; `resume` takes exclusive ownership and marks an attempt with dispatch intent but no terminal record `EXECUTION_UNKNOWN` instead of redispatching it. `docs/unattended.md` has the parent loop.
+- **`bin/gstack-outside-voice run --runner codex-cli|api|host-subagent`** over one adapter interface (capabilities, input digest, actual model metadata, cancellation, terminal result, usage). A result file from a subagent on another model family is a full outside voice and records its model; a missing Codex CLI is not "degraded" when another runner reviewed. `bin/gstack-codex-login` logs Codex in from `OPENAI_API_KEY`.
+- **`--spend-cap`** is enforced by a shared ledger (`lib/spend-ledger.ts`: `spent + reserved + next_estimate <= cap` under a file lock; reservations survive a crash; host-subagent spend is reported `unknown`, not zero).
+- **Checklists.** Each plan review skill ships `sections/checklist.md` (under 35 lines) with an output-to-section map; unattended and `light` runs load it and print `Skipped sections: <ids> (scope: …)`, loading the deep section whenever scope detection is uncertain. Manifests gain an optional `scope` (default `always`) and `runner_only`; interactive renders are unchanged.
+- **Spec-review loop at the cap** (`gstack-office-hours-review finalize`): numbered unresolved gaps, then either a deterministic `issues verified: k of N` record or `N fixes unconfirmed` with `Decision: spec not re-verified`; never a fourth model launch, never promoted to a verdict.
+- **Reconciliation.** When an outside pass runs beside the native one, the consensus table and per-finding reconciliation are computed from canonical finding ids (confirmed, disagree, new), and the Eng prompt refuses to start without the prior phase's consensus (`CONSENSUS_MISSING`).
+
+### Itemized changes
+
+#### Added
+- `lib/autoplan-state.ts`, `lib/autoplan-run.ts`, `lib/autoplan-gate.ts`, `lib/autoplan-export.ts`, `lib/autoplan-prompts.ts`, `lib/autoplan-reconcile.ts`, `lib/spend-ledger.ts`, `lib/spec-review-cap.ts`, `lib/outside-voice-runner.ts`, `lib/outside-voice-api.ts`; `bin/gstack-autoplan`, `bin/gstack-outside-voice`, `bin/gstack-codex-login`; `autoplan/sections/unattended.md`; `sections/checklist.md` in the four plan review skills; eleven new result codes with troubleshooting anchors.
+
+#### Changed
+- `lib/headless-artifacts.ts`: `ackRun` runs under a file lock (exactly-once ack); `native_counterpart` accepts `null`.
+- `scripts/resolvers/sections.ts` types `scope` and `runner_only`; `scripts/resolvers/spec-review.ts` prose names the cap record in all three loop branches.
+- Union bytes: plan-ceo/eng/design/devex-review grow under their caps; autoplan +612 (65 bytes of headroom left); ship, review and qa unchanged.
+
+#### For contributors
+- New tests: `test/autoplan-run-recovery.test.ts` (kill before and after persistence, no duplicate charge), `test/autoplan-run-concurrency.test.ts` (one of six concurrent submits binds; exactly-once ack), `test/autoplan-answer-invalidation.test.ts`, `test/review-checklists.test.ts` (obligation map with negative controls), `test/outside-runner-contract.test.ts`, `test/spend-ledger.test.ts`; `test/office-hours-review.test.ts` and `test/office-hours-completion.test.ts` cover the cap record.
+- Not in this release: the rendered Codex prose still shells to `codex` directly (`scripts/resolvers/outside-voice-steps.ts`); routing it through `bin/gstack-outside-voice` touches 21 Codex-pinned tests and the ship/review byte budgets, so it follows separately. `gstack-autoplan run` (the in-process loop) is typechecked but exercised only through `next`/`submit`.
+
+## [1.91.71.0] - 2026-10-10
+
+**A parent agent can now confirm a gstack install with one grep: `gstack-doctor --check` prints one PASS/FAIL/SKIP row per component and exactly one `gstack: ok … for=<skill>` or `gstack: fail <ids>` trailer with a real exit code, and `gstack-capy-install` sets up a Capy machine without downloading Chromium.**
+
+The user-scope Capy installer's `--check` certified machines with nothing installed, planning machines paid 86 s for a browser they never opened, and `./setup` exited before its own repair step on an image whose Bun was below gstack's floor. This release is PR A of the multi-agent wave (`docs/designs/MULTI_AGENT_WAVE_2026_10_10.md`).
+
+### What this means for you
+
+- **`gstack-doctor --check [--for <skill> | --require <csv>] [--project <path>] [--revision <ref>] [--json] [--live]`.** Rows are `PASS|FAIL|SKIP <id> <detail>` (`claude codex patch codex-cli browse-bundle browser cso runtime pins state-root privacy cores revision`); every FAIL carries `fix: <exact command>` and a reason code with a `docs/troubleshooting.md` anchor. `--for autoplan` requires only what autoplan needs: a healthy Capy machine with Claude subagents as the outside voice and no Codex CLI passes. The paid Codex probe runs only with `--live`. Exit 0 only when every required component passes; 1 on a FAIL; 2 on usage. The doctor still reports with Bun absent or below floor (the component table is generated into sourced bash).
+- **The `runtime` row distinguishes gstack's security floor (1.3.3) from its supported minimum (1.4.2)**; the default Capy image's Bun 1.3.14 is a FAIL under `--check`. The new `pins` row reads the *target project's* `packageManager`, `engines`, `.tool-versions`, `.nvmrc`, `.bun-version` and CI matrix pins (per lane, so a Windows pin never blocks a Linux run) and names each constraint's source.
+- **`bin/gstack-capy-install`** (Capy cloud Ubuntu): Bun/Node/jq preflight before `./setup` (Bun upgraded from the exact release archive with SHA-256 verification when gstack's minimum and the project pin agree; `RUNTIME_PIN_CONFLICT` stops with both printed and installs nothing), reuses an existing checkout without reset or pull, runs both host setups without the browser, prints planning-only install time separately, and ends with the doctor trailer plus `GSTACK_LAUNCH: GSTACK_SESSION_KIND=unattended GSTACK_STATE_ROOT=<path> GSTACK_EPHEMERAL=1` for the parent to pass to every gstack command. `--revision <ref>` on a checkout at another revision reports `(requested <ref>; run gstack-upgrade to move)`, never pulls. See `docs/capy-install.md`.
+- **Chromium is lazy.** `./setup --no-browser` is a documented flag; `bin/gstack-browser-ensure` installs the browser on the first browser-skill run under setup's lock, and every browser skill's fallback detection calls it. `--check` reports `SKIP browser (lazy; gstack-browser-ensure installs on first use)` for planning skills.
+- **`./setup --status` exits 1** when an install has broken section links instead of always 0.
+- The doctor's `state root` row prints `durable=yes|no` from the `GSTACK_EPHEMERAL=1` marker (`docs/state-root.md#ephemeral-machines`).
+
+### Itemized changes
+
+#### Added
+- `bin/gstack-doctor-check.sh` (sourced by `bin/gstack-doctor`), `lib/doctor-components.ts` → generated `bin/gstack-doctor-components.sh` (`scripts/gen-doctor-components.ts`, freshness-tested), `lib/runtime-pins.ts` + `bin/gstack-runtime-pins.ts`, `lib/result-codes.ts` (`COMPONENT_MISSING`, `RUNTIME_BELOW_MINIMUM`, `PROJECT_PIN_MISMATCH`, `REVISION_UNMET`, `RUNTIME_PIN_CONFLICT`, `BROWSER_UNAVAILABLE`, `INSTALL_PREFLIGHT_FAILED`), `bin/gstack-capy-install`, `bin/gstack-browser-ensure`, `docs/capy-install.md`.
+
+#### Changed
+- `setup`: `--no-browser`, `--status` exit code, Bun install hint uses the release-archive recipe (`bash "$tmpfile" "bun-v$BUN_VERSION"`; the install script pins by positional argument). Bun release checksums live in `bin/gstack-bun-version.sh`.
+- `scripts/resolvers/browse.ts`: `$B` detection runs `gstack-browser-ensure` before `READY`, byte-neutral on the zero-headroom skills.
+
+#### For contributors
+- New tests: `test/gstack-doctor.test.ts` `--check` fixtures (healthy, each missing component, wrong host, missing auth, runtime mismatch at both floors, bun removed from PATH, pins, unmet revision, browser only for browser skills, `--json`, usage), `test/gstack-capy-install.test.ts`, `test/gstack-browser-ensure.test.ts`, `test/runtime-pins.test.ts`, `test/doctor-components.test.ts`.
+- Any later change to browse.ts prose needs a reversal entry in `test/helpers/manual-judge-review-fixture.ts`; new gen-skill-docs sibling modules need an entry in `test/gen-skill-docs-prune-stale.test.ts`; new network operations in `bin/` need an `egress-receipt-wiring` entry.
+
+## [1.91.70.0] - 2026-10-10
+
+**gstack runs unattended for a parent agent: one artifact contract a parent can validate, an `unattended` session kind that never prompts or syncs, a review log whose status is derived from its findings, and a gate list that is written, never auto-approved.**
+
+Parent agents running gstack on a subagent machine had no way to tell a finished `/autoplan` from an interrupted one, no session kind that meant "nobody is at the keyboard but this is not CI", and a review log whose `clean` status could disagree with its own findings. This release is the first half of the multi-agent wave (`docs/designs/MULTI_AGENT_WAVE_2026_10_10.md`, PR B-core).
+
+### What this means for you
+
+- **`GSTACK_SESSION_KIND=unattended`** is a fourth session kind, honored only as the explicit override. It suppresses every prompt and publication the way `spawned` does and also skips the telemetry writer, the artifacts sync and the brain spool with an explicit line each (`TELEMETRY_WRITE: skipped`, `ARTIFACTS_SYNC: skipped (unattended session; …)`), whatever settings the machine inherited. `headless` keeps its BLOCK meaning, so no eval case changes.
+- **Every run prints `STATE_ROOT: <path> durable=yes|no`.** With `GSTACK_EPHEMERAL=1` set by the host, an unattended run says `learnings: skipped (state root is ephemeral; set GSTACK_STATE_ROOT)` instead of writing to a disk that will vanish.
+- **`/autoplan` unattended writes a run directory** (`run.json`, `decisions.jsonl`, `findings.jsonl`, `tasks.jsonl`, `timing.json`, `plan.md`, `review-record.md`) and ends with `GSTACK_RESULT: skill=autoplan status=gate_pending run=<dir>`. `gstack-artifact validate run.json` is the one deterministic completion check; it fails on an interrupted run, a missing reviewer, a stale artifact, a findings count that disagrees with the file, duplicate ids, dependency cycles or a path that escapes the run directory. `docs/unattended.md` shows the six-step parent flow with `jq` and `grep`.
+- **The final gate is one list with one reply grammar** (`all`, `<id><option>`, `all except …`), stable ids across pages, `auto` versus `approval` items, and a `gate_rev` that rejects a stale reply with no writes. Unattended runs never approve their own gate.
+- **`## URGENT, outside this plan`** is the fixed first block of every autoplan report and plan, `None.` when nothing was raised.
+- **Review-log rows derive their status from findings.** `gstack-review-log --findings <path>` computes `status`, `unresolved`, `issues_found`, `critical_gaps`, `findings_total/open/resolved` from the file and rejects a row whose claimed values disagree (`REVIEW_STATUS_MISMATCH`, exit 1; usage is exit 2).
+- **Timing.** Phase 0 prints an estimate from your last ten runs (`no history` when empty) and the report prints the actual whole-cycle time next to it.
+- On hosts that do not execute hooks, `/autoplan` prints `autoplan guard: not enforced by this host; publication order is unverified (GUARD_NOT_INSTALLED)` once; Claude Code's deny-on-absent hook is unchanged.
+
+### Itemized changes
+
+#### Added
+- `lib/headless-artifacts.ts` (schemas, `validateRun`, `ackRun`, `GSTACK_RESULT` grammar, shared exit table) and `bin/gstack-artifact validate|schema|ack|urgent [--json]`.
+- `lib/result-codes.ts`: reason codes with `docs/troubleshooting.md` anchors and `fix:` clauses for every new error line (`ARTIFACT_*`, `GUARD_NOT_INSTALLED`, `REVIEW_STATUS_MISMATCH`, `GATE_REV_STALE`, `GATE_REPLY_UNPARSED`).
+- `lib/gate-list.ts` and `bin/gstack-gate render|parse|decisions`.
+- `lib/autoplan-timing.ts` and `bin/gstack-autoplan-timing start|close|estimate|summary`; analytics at `<state root>/analytics/autoplan-timing.jsonl`, skipped with a printed line on an ephemeral root.
+- `docs/unattended.md`; reference run under `test/fixtures/multi-agent-wave/reference-run/`.
+
+#### Changed
+- `bin/gstack-session-kind` and `bin/gstack-skill-start`: `unattended` whitelisted; an unknown kind prints `SESSION_KIND: interactive (unknown kind '<x>')`; `STATE_ROOT`, `UNATTENDED_SESSION`, telemetry, sync and brain-spool skips; `bin/gstack-skill-end` emits a cached one-line upgrade notice instead of draining.
+- `lib/review-evidence.ts`: `bindReview` validates a findings file before consuming the start token; `reviewFreshness` reads `findings_open`; legacy counters keep their conservative reading.
+- `autoplan/SKILL.md.tmpl` and `phase-close`: run id and estimate in Phase 0, gate list and URGENT block in Phase 4, timing on close. Union bytes shrank on every skill (autoplan −163); nothing grew.
+- Preamble and `auq-error-fallback-hook`: unattended resolves the recommended option and logs it.
+
+#### For contributors
+- New tests: `test/headless-artifacts.test.ts`, `test/gate-list.test.ts`, `test/autoplan-timing.test.ts`, `test/review-log-findings.test.ts`; `test/gstack-skill-start.test.ts` gains an instrumented egress test (telemetry, sync and update-check sinks receive zero calls under unattended, all three under interactive).
+- `CARVE_GUARDS` autoplan `gateAfterStop` marker now keys on the gate file write; golden ship renders refreshed.
+
+## [1.91.69.0] - 2026-10-10
+
+**/cso eval cells now get time to finish their report, keep their spend when they run out of time, and stop mislabeling the helper's own files as secrets.**
+
+The first paid smoke cells that ran real scanners both ended as `REDACTION_FAILED` with no usage and no artifacts after the full 30 minutes. There were three causes.
+
+- **Every artifact path tripped the secret check.** The helper names each run `<epoch ms>-<hex>`, and the secret redactor reads a 13-digit epoch as a phone number. Some 32-hex review IDs also read as wallet addresses. So the first run that actually wrote artifacts failed the post-run inventory, every time.
+- **The provider was killed at the budget.** The producer stopped Claude at exactly `--budget` after the cell started. The helper's own deadline is the budget after `start`, and its `finish` writes the report after that deadline. Both agents started the helper within 30 seconds, worked until the deadline, and were killed before they could call `finish`.
+- **A kill threw the spend away.** `--output-format json` reports usage only when Claude exits, so a timeout recorded zero tokens.
+
+### What this means for you
+
+- Helper artifact names are checked against the helper's layout: `<repoId>/<runId>/...`, `public-cache/` and `legacy-imports/`. A path component that is wholly a helper identifier is accepted by its shape. Every other component, including source paths mirrored under `snapshot/` and `readable/`, still goes through the secret redactor.
+- The producer gives the provider the budget plus 300 seconds of reporting time (`PRODUCER_REPORTING_GRACE_SECONDS`, the evaluator's frozen `graceSeconds`). The helper still refuses evidence after its deadline, so the measured budget is unchanged. The agent just gets to call `finish`, as a user's agent would.
+- Claude producers stream events (`stream-json --verbose --include-partial-messages`) and add up usage message by message. A timed-out receipt carries its tokens, estimated cost, turns and the agent's last text, marked `failed` with `timeout`. A run with no successful, nonblank final result still fails.
+- A failed post-run check now names the check in the receipt's reason, for example `artifact inventory check: ...`. A redaction rejection says which component failed and never includes the component itself.
+
+### Itemized changes
+
+#### Fixed
+- `inventoryProducerArtifacts` validates paths with `assertProducerArtifactPath`. Paths outside the helper layout fail as `INVALID_PRODUCER_ARTIFACTS`. A component that looks like a secret fails as `REDACTION_FAILED` with its position and masked parent.
+- `runProducerCell` passes `producerProviderTimeoutMs(budget)`, which is the budget plus 300 s. Integrity failures read `<check> check: <detail>`, and add the provider's own error code when there was one.
+- The Claude producer runs through `runClaudeProducerStream` in `test/helpers/providers/claude-stream.ts`. It folds the event stream as it arrives, so no output buffer can overflow. It resolves even when a grandchild holds stdout, and keeps the `Command failed: <command> <args>` reason on a nonzero exit. Non-producer Claude evals are unchanged.
+
+#### For contributors
+- `test/claude-producer-stream.test.ts` covers stream accounting, the paid result contract, a timed-out stub, and nonzero and clean exits. `test/cso-eval.test.ts` covers the real helper layout (an epoch run ID and a wallet-shaped review ID), a planted secret-shaped file name, and a timed-out receipt that keeps its usage.
+- The evaluator's cells need a matching change: an outer timeout of the budget plus 600 s, and the new Claude flags in the stub preflight prefix.
+
+## [1.91.68.0] - 2026-10-08
+
+**Claude /cso eval cells run the real scanners again, never break their own source check, and still record what they spent when a post-run check fails.**
+
+The first paid baseline smoke cells ran the agent to completion, then stopped with a bare `INVALID_PRODUCER_SOURCE` and no receipt. That meant no tokens, no cost and no clue which file was at fault. The cause was the producer's own Claude launch. It passed the sealed source copy to Claude as an `--add-dir`. Claude Code treats each added directory as a sandbox write root and blocks writes to its `.mcp.json`. With no `.mcp.json` present, bubblewrap creates an empty one on the host as a mount point. Claude Code can't remove it from the read-only directory afterwards, so the source check rightly failed.
+
+### What this means for you
+
+- Claude producers no longer receive the source as an added directory, so the source stays byte-for-byte unchanged.
+- The trusted launcher now runs outside Claude Code's sandbox, as it does for users. Inside the sandbox, root-owned paths look like they belong to `nobody` and the Docker socket is unreachable. So the launcher's own checks failed, and every comprehensive cell quietly fell back to a static-only review: `Private state ancestor has an unexpected owner` and `ISOLATION_FAILED: Docker endpoint is not a local Unix socket`. Every other Bash command still runs sandboxed and is denied by the allowed-tools list. Write stays inside the provider work directory.
+- When a post-run integrity check fails, the producer writes a receipt with `status: "failed"` instead of no receipt. The receipt carries the check's code and reason, plus the run's usage, tokens, estimated cost, duration and tool calls. This applies to a changed source, mode or Git state, a changed helper or provider installation, an artifact problem, and oversized output. That receipt has no output and no artifacts, and it never counts as succeeded.
+- `INVALID_PRODUCER_SOURCE` and `PRODUCER_CHANGED_SOURCE_MODE` name the first offending relative path and the rule it broke, for example `".mcp.json" is not in the expected source listing`. They never include file contents.
+
+### Itemized changes
+
+#### Fixed
+- `claudeExecArgs` drops `--add-dir <source>` for CSO producers.
+- `claudeExecArgs` passes `--settings` with a sandbox policy for CSO producers: enabled, fail if unavailable, no unsandboxed fallback, no auto-allow for sandboxed commands, and `excludedCommands` holding only the exact launcher path from `--allowed-tools`. It no longer sets `CLAUDE_CODE_SUBPROCESS_ENV_SCRUB`, which in Claude Code 2.1.263 forces every command into the sandbox, `excludedCommands` notwithstanding. The launcher still replaces its environment with a fixed allowlist before it runs anything.
+- `ClaudeAdapter.run` refuses to start a producer agent (`CLAUDE_PRODUCER_SANDBOX_POLICY_MISMATCH`) unless the generated arguments and environment carry exactly that policy.
+- The README's containment note explains both.
+- `runProducerCell` turns post-run check failures into failed receipts that keep usage. A redaction failure still withholds the receipt, as before.
+- Source validation reports a missing or extra path, the hard-link count, a size or hash mismatch, symlinks and special files, and a Git `include` directive, each with its path.
+
+#### For contributors
+- The sandbox-policy check has tests for a missing, duplicated or `=`-joined `--settings`, a widened or symlinked exclusion, fallback or auto-allow turned on, extra keys, widened allowed tools, and the scrub variable.
+- New tests cover a failed receipt for a provider race, a helper-generation change, oversized output, four source mutations (including a leftover empty `.mcp.json`), and a mode change. Each test checks the usage numbers and confirms collection counts the cell as failed.
+
+## [1.91.67.0] - 2026-10-08
+
+**Antigravity CLI is now a gstack host.**
+
+Eight contributors sent PRs asking for Antigravity support. This release builds one host on the current host system, using paths and tool names checked against Google's Antigravity docs on 2026-10-08.
+
+### What this means for you
+
+Run `./setup --host agy` (or `--host antigravity`). Every skill installs into `~/.gemini/antigravity-cli/skills/`, and you invoke each one as `/gstack-<skill>`. `--host auto` picks Antigravity up when `agy` is on your PATH or `~/.gemini/antigravity-cli` exists.
+
+Skills are rendered with Antigravity's own tool names (`run_command`, `view_file`, `ask_question`, `invoke_subagent` and the rest) and the Gemini model profile. The host is experimental until a real Antigravity session certifies it.
+
+### Behavior changes you may notice
+
+- **Gemini CLI's files are left alone.** Gemini CLI shares `~/.gemini`, but gstack never touches `~/.gemini/skills` or Gemini CLI's settings. A machine with only Gemini CLI is never detected as Antigravity.
+- **Not covered yet:** the Antigravity 2.0 app and the IDE, which read `~/.gemini/config/skills`.
+
+### Itemized changes
+
+#### Added
+- The `agy` host (alias `antigravity`):
+  - Frontmatter is limited to `name` and `description`, and the build fails if a description exceeds 1,024 characters.
+  - A tool glossary, the Gemini overlay, and an `AGENTS.md` rewrite.
+  - Advisory-only safety skills, with Review Army suppressed, as on Copilot.
+- Setup, `--status`, uninstall and team-init cover the host. Its render is kept under "render only installed hosts", and setup fails if no skills were linked.
+
+#### For contributors
+- docs/ADDING_A_HOST.md records how each of the nine Antigravity PRs was used, or why it wasn't.
+- Built on work by @0xshae (#2134), @ManchalaSashank (#2893), @voipexpert (#2726) and @KiDDarn (#2244).
+- Still to verify on a real install: symlinked skill directories, the `/gstack-*` commands appearing, `ask_question` option handling, partial `view_file` reads on long skills, and upgrading an existing install.
+
+## [1.91.66.0] - 2026-10-08
+
+**/autoplan no longer asks permission to read its own files after a background reviewer finishes.**
+**34 contributor PRs from the outside-PR backlog land in this release, rewritten on current code with credit.**
+
+On Claude Code 2.1.292, interactive sessions run /autoplan's reviewers in the background. When a reviewer finishes, its completion notice starts a new turn, and in that turn Claude Code no longer applies the skill's allowed tools. So reading the next phase's instructions, the phase close packet and later reviewers' own inputs each raised an "allow this?" prompt. This release also works through the outside-PR backlog together with GSTA-27: every open PR was checked against current main, and the open count went from about 200 to about 20.
+
+### The numbers that matter
+
+| Check | Before | After |
+|---|---|---|
+| Permission prompts for /autoplan's own files in the scripted live run (2.1.292, default settings) | 2 | 0 |
+| Same, through `claude --bg` and `claude attach` | 1 | 0 |
+| Outside PRs adopted in this release, rewritten with credit | 0 | 34 |
+| Outside PRs closed by this thread, each with a specific reason | 0 | 113 (46 already fixed or stale, 32 declined, 35 parked in TODOS.md) |
+
+### What this means for you
+
+Run `/gstack-upgrade`. /autoplan now keeps its restore point and phase artifacts in the project's git-excluded `.gstack/tmp/autoplan/`. Both /autoplan and its reviewers read files there without a prompt, and a `git clean -x` removes them. Two prompts remain:
+- In Manual permission mode, /autoplan's Bash commands still ask after the first background reviewer.
+- A session started in a subdirectory of the repo still asks when a reviewer reads its input.
+
+Both are tracked in TODOS.md.
+
+### Behavior changes you may notice
+
+- **Skills reply in the language of your latest message.** Code, commands, paths, identifiers and question markers stay as written. Thanks @shrektan (#679).
+- **`/benchmark` routes only web page performance requests.** Model and skill benchmarks go to `/benchmark-models`. Thanks @creatornader (#2302, #2083).
+- **Required team mode's hook is now `check-gstack.cjs`, registered with a command that has no shell variables.** It now allows and denies correctly under cmd.exe, PowerShell and Copilot CLI. Re-running `gstack-team-init required` migrates an old `.sh` registration in place. Thanks @neallee2012 (#2217).
+
+### Itemized changes
+
+#### Added
+- `browse viewport auto` (aliases `reset`, `unpin`) undoes a `viewport WxH` pin without a restart. In headed mode the page follows the real browser window again, keeping cookies, storage, the tab and loaded HTML; headless returns to 1280x720. Thanks @loulanyue (#2782) and @jbetala7 (#1881).
+- `browse screenshot` accepts `--clip=x,y,w,h` and `--selector=<css>` alongside the space-separated forms. Thanks @techcenter68 (#1563).
+- Pre-push redaction: a committed `.gstack-redact-allowlist` at the repo root clears a reviewed, known-benign value by its exact matched text, and every push lists what it suppressed. A substring or a different credential still blocks. Thanks @boyard (#2598).
+- Artifacts sync can publish removals. With `gstack-config set artifacts_sync_removals on`, deleted or slug-moved files stop lingering on the remote and in the brain. More than 20 removals at once wait for `gstack-brain-sync --publish-removals --yes`. Thanks @Jey2311 (#2892).
+- Windows: `.\setup.ps1` checks for Git for Windows, Bun and Node.js, then runs `./setup` in Git Bash with your arguments passed through unchanged. Thanks @jimmckeeth (#657).
+- The design binary honors `OPENAI_BASE_URL`, so image generation and screenshot analysis can go through an OpenAI-compatible gateway; egress receipts record the gateway host. Thanks @jackjin1997 (#932).
+- On Codex, /design-shotgun generates and edits mockups with Codex's built-in `$imagegen`, so ChatGPT-signed-in users need no `OPENAI_API_KEY`. The design binary still serves the comparison board. Thanks @jinzheio (#2175).
+- The sidebar terminal toolbar has an XS–XL text-size picker. It defaults to today's 13px and remembers your choice. Thanks @tomfluff (#2288).
+- `gstack-developer-profile --reconcile` backfills office-hours tenure from `timeline.jsonl`. Backfilled rows count toward the tier but never appear as "last time" context. Thanks @briacSck (#2668).
+- `/retro` saves its "3 Things to Improve" in the snapshot, and the next retro reports how many prior recommendations were addressed. Thanks @jbetala7 (#1853).
+- `gstack-global-discover` splits Codex sessions by originator (interactive CLI, Desktop, `codex exec`, Claude Code, other), per repo and in total, so `/retro global` can tell interactive work from scripted runs. Thanks @0xDevNinja (#1488).
+
+#### Changed
+- `/review`'s testing specialist treats a new negative assertion as a behavior decision that needs cited intent, and catches old negative assertions that a rename or removal made vacuous. Thanks @EmilianoU26 (#2861).
+- `/review`'s security specialist checks four access-control leaks that a route-guard read misses: error pages built outside the guard, ownership surviving a role downgrade, list/detail/download paths checked as one, and a session changed before the identity-switch callback is validated. Thanks @EmilianoU26 (#2859).
+- `/review` says a clean diff can come back with zero findings, and stops flagging six common false positives. Thanks @frosimanuel (#2820).
+- `/review`'s value-completeness check also fires when a diff loosens what an input accepts, and the maintainability specialist flags user-facing strings whose guarding condition changed. Thanks @aversini (#2141).
+- `/review` and `/ship` give the security specialist and the Red Team the same defensive-security framing as the adversarial pass, so repos with attack-payload test corpora no longer get those passes refused. Thanks @bmajewski (#1921).
+- `/design-review` reads your code's design tokens before falling back to universal principles, and its target mockups reuse your palette, fonts, radii and spacing. Thanks @tomdinh24 (#1920).
+- `/setup-deploy` no longer assumes Vercel deploys on push; CLI-only projects record their real deploy command. Thanks @mikehasa (#2992).
+- The shared voice bans "load-bearing", and the closer guidance is shorter. Thanks @creatornader (#1795).
+- GitLab CI and the Ubicloud free-suite setup install Bun from the SHA-256-verified release archive instead of piping bun.sh/install into bash. Thanks @spacegeologist (#1713).
+- CI's GitHub Actions SHA pins are refreshed (docker/setup-buildx-action 4.4.1, docker/build-push-action 7.4.0, actions/attest 4.2.2, actions/setup-node 7.0.0), each with its exact version comment (#2988).
+
+#### Fixed
+- The pre-push scan reads merge-commit lines without their second parent column, so a merge that resolves a release bump no longer reports its version strings as public IPs.
+- /autoplan's own section files and phase artifacts no longer raise permission prompts after a background reviewer's completion notice, in the foreground or with `claude --bg`. The publication guard's checks are unchanged.
+- The outside-review classifier reads a trailing `— Medium.` or `(High)` severity on a finding line, the shape Codex now writes. Before this, such a review was reported `unverified`.
+- `gstack-hook-check` checks the hooks skills register (/careful, /freeze, /guard, /investigate, /plan-ceo-review), the shell helpers they source, and conflict markers that still parse, including in imported modules. It also ignores the calling project's tsconfig.json and bunfig.toml. Thanks @BenjaminDSmithy (#3066).
+- On Windows, /setup-gbrain registers the gbrain MCP through bun.exe, so Claude Code no longer opens a console window each session. The skill also explains a PGLite "Failed to connect" that is only lock contention. Thanks @pmaxhogan (#2007) and @maxpetrusenkoagent (#1963).
+- Hermes, GBrain, OpenClaw and Factory skills no longer leak Claude's "Agent tool" name. Thanks @katlun-lgtm (#1935).
+- Benchmarks bill Codex cached input at the cache-read rate, and a stored Gemini OAuth file alone is no longer reported as ready. Thanks @KiDDarn (#2283).
+- `gstack/llms.txt` links every skill to a file that exists. Thanks @creatornader (#2279).
+- The OpenClaw docs no longer tell you to pass `env` to `sessions_spawn`, which has no env argument. Thanks @DanCanadian (#2749).
+- A broken link in `docs/TESTING_INTERNALS.md`. Thanks @thearbajonart (#3070).
+
+#### For contributors
+- `autoplan/bin/owned-read.ts` approves only this install's `autoplan/sections/*.md` and immutable phase artifacts under the repo's `.gstack/tmp/autoplan/`. It never denies, and it runs only when the guard returned nothing.
+- The paid `autoplan-guard-pty` case asserts zero permission cards across a background reviewer's notice turn.
+- TODOS.md gains "Parked contributor ideas (Oct 8 triage)", which keeps 35 parked PRs grouped by theme with their authors.
+
+## [1.91.65.0] - 2026-10-08
+
+**A gstack install carries skills only for the agents you installed: a global Claude install drops from 632 SKILL.md files (34.7 MB) to 63 (2.5 MB).**
+**Codex and the other non-Claude agents get every file their skills read, instead of failing those reads silently.**
+
+`./setup` rendered every agent's copy of the skills inside the install (#1694). A global Claude install at `~/.claude/skills/gstack` held Codex, Factory, Kiro, OpenCode, Cursor, Copilot, Slate, OpenClaw, Hermes and GBrain renders next to its own skills. Claude Code and Cursor-agent scan that tree, and Cursor-agent freezes above about 11 MB of skill files. Separately, the runtime directories setup builds for Codex, Factory, Kiro, OpenCode, Cursor and Copilot were missing files the skills read on demand: the jargon list, the question registry, the AskUserQuestion guides, the review checklists, the DX Hall of Fame and more (#1077's remaining part).
+
+### The numbers that matter
+
+Measured on Linux with a sandboxed HOME, installing from a fresh clone of the commit before this release (4637fae) and of this branch. The setup builds were real; Chromium and fonts were skipped.
+
+| Install | Before | After |
+|---|---|---|
+| Global Claude install (`./setup`) | 632 `SKILL.md`, 34,738,066 bytes | 63 `SKILL.md`, 2,520,330 bytes |
+| Existing install upgraded, then `./setup` | 632 `SKILL.md`, 34,738,066 bytes | 63 `SKILL.md`, 2,520,330 bytes; 569 generated `SKILL.md` (36.3 MB with their other files) moved to the backup |
+| Development checkout with `./setup --host codex` | 632 `SKILL.md`, 34,738,066 bytes | 119 `SKILL.md`, 5,772,984 bytes (Claude plus Codex) |
+| Same checkout, `GSTACK_RENDER_HOSTS=all bun run build` | 632 | 632; the next `./setup` prunes back to 119 |
+| `$GSTACK_ROOT` paths missing from the Codex runtime root | 10 of 80 | 1 of 80 (`scripts/ship-measure.ts`, deferred) |
+
+### What this means for you
+
+Run `/gstack-upgrade` (or `git pull && ./setup`). The first setup prints one `pruned <dir>` line per agent you don't use from this checkout and a `host-render backup:` line naming where the generated files went; the next `./setup` prints none. `./setup --status` lists your agents, and `./setup --host <name>` adds one back. Nothing gstack can't prove it generated is removed.
+
+### Itemized changes
+
+#### Fixed
+- An install renders skills only for the agents installed from it. setup records them in `.gstack-installed-hosts` in the checkout and never drops one, so `./setup --host codex` keeps a Factory render. The first run seeds the record from what the checkout already serves: install registry rows, install directories that resolve to it, agent skills that link into its renders, and legacy copy installs. `scripts/build.sh` renders Claude plus the recorded agents and prints which and why. A checkout with no record (a development checkout) still renders every agent, and `GSTACK_RENDER_HOSTS=all` forces that inside an install. (#1694)
+- Every `./setup`, and a migration for upgrades, prunes the renders of agents missing from the record, using `gstack-relink`'s proof rules. Links into the checkout are removed. Files proven generated (gstack's generated-file banner, the generator's exact `openai.yaml`, or byte identity) are moved to `~/.gstack/backups/host-renders/<time>-<id>/`. Every other file stays where it is, and only emptied directories are removed. setup prints each kept file and a summary per agent, and `prune.log` in the backup lists every path. Two installs that share one state root are each cleaned. (#1694)
+- The Codex `.agents/` render is made only when Codex is installed or recorded; a Claude-only setup used to make it every time. (#1694)
+- Codex, Factory, Kiro, OpenCode, Cursor and Copilot runtime roots carry every file their skills read as `$GSTACK_ROOT/<path>`: `VERSION`, `scripts/jargon-list.json`, `scripts/question-registry.ts`, the AskUserQuestion split and CJK guides, `docs/test-value-bar.md`, all four review checklists and the review specialists, `plan-devex-review/dx-hall-of-fame.md`, design-html's vendored `pretext.js`, and host-rendered `office-hours` and `plan-design-review` `SKILL.md` copies. Cursor had two of the four checklists and only OpenCode had the specialists. (#1077)
+
+#### Added
+- README and `docs/troubleshooting.md` explain the record, the prune and its backup, and how to get an agent back. `docs/ADDING_A_HOST.md` documents the render contract and the new host checklist step. setup's Hermes, OpenClaw and GBrain hints say to add the agent to the record before rendering it by hand.
+
+#### For contributors
+- `bin/gstack-host-renders.sh` owns the record, the build's host selection and the prune; `scripts/build.sh`, setup, `bin/dev-setup` and `gstack-upgrade/migrations/v1.91.65.0.sh` source it. `bin/dev-setup` records Codex because it serves the repo's `.agents/`. `hosts/define-host.ts`' `sharedRuntimeRoot()` mirrors setup's new `_link_runtime_dists` list and `_copy_runtime_skill_refs`.
+- New tests: `test/runtime-root-assets.test.ts` builds each runtime root with setup's own functions and checks every `$GSTACK_ROOT` literal in that agent's render on disk (it fails on the previous setup for all five roots); `test/host-renders.test.ts` (record, build selection, sequential installs, the upgrade refresh path); `test/host-renders-prune.test.ts` (a real all-agent render with a customized file, a user file, a look-alike skill and links; two installs on one state root; link-based seeding; the migration).
+- Not verified: Cursor-agent and Claude Code were not re-run against the trimmed tree; the numbers are on-disk counts. The Windows copy-install paths are covered by stubbed tests only.
+- Thanks to @vschoener for reporting #1694 and for the first fix attempt in #1695, @skyzer for the relocation approach in #1819 (both closed in favor of this one), @Saisreenivas for the Cursor-agent freeze report, and @el-analista for #1077.
+
+## [1.91.62.0] - 2026-10-08
+
+**A Rails repair can now finish verifying on arm64.**
+
+On arm64, every Rails verification failed with `ISOLATION_FAILED`, reporting either "Exact reproduction cleanup failed" or "Attempt watchdog did not acknowledge execution-copy cleanup". Neither cleanup was broken. One attempt prepares the application twice, and an offline Rails preparation that compiles native gems takes 6.8 to 8.5 minutes on a 4-vCPU arm64 runner, against about 3.5 minutes on amd64. The 900-second attempt bound expired during the second preparation, the watchdogs cleaned up on schedule, and the helper reported that deadline as a cleanup failure.
+
+### The numbers that matter
+
+Measured on Ubicloud 4-vCPU runners with the staged Rails image from staging run 37735865870 and gstack 1d1ce39b4. Each figure is the start-to-kill time of one Docker group, taken from `docker events`.
+
+| Rails verification step | amd64 | arm64 |
+|---|---|---|
+| Offline preparation (each of the two phases) | 3.3–3.5 min | 6.8–8.5 min |
+| Phase observation (boot, controls, tests) | 8–10 s | 14–26 s |
+| Where the 900 s attempt ended | finished in about 8 min | killed during the second preparation, 3 of 3 arm64 reference repairs |
+| Attempt bound | 900 s | 1,800 s, still cut to the run's reporting deadline |
+
+### What this means for you
+
+Rails repairs on arm64 hosts, including Apple silicon Docker, can now reach `runtime_tested` and replay. Node, Bun and Python keep their 300-second attempt.
+
+### Itemized changes
+
+#### Fixed
+- `MAX_VERIFICATION_ATTEMPT_MS`, the Rails attempt and replay bound, is now 1,800 seconds. That equals the longest comprehensive run budget, and each attempt is still cut to the run's reporting deadline. The attempt watchdog, the Docker verification executor and the assertion witness lifetime share this bound.
+
+#### For contributors
+- `test/cso-cli-lifecycle.test.ts` pins the new bound.
+
+## [1.91.60.0] - 2026-10-08
+
+**Windows setup finishes when the optional /cso helper fails to build, and it tells you when Smart App Control blocks gstack's binaries.**
+
+On Windows, `./setup` stopped completely when the native /cso helper failed to build or publish (#3071), even though /cso is optional and every other skill was ready. On Windows 11 with Smart App Control on, setup reported success while Windows refused to start all five binaries gstack compiles (`browse`, `find-browse`, `design`, `pdf`, `gstack-global-discover`). Git Bash shows that as `Permission denied`, so `/qa`, `/browse`, `/design-*` and `/make-pdf` failed later with a misleading error (#2595, #2124). And the sidebar terminal rendered every character double-width on Windows (#2287).
+
+### The numbers that matter
+
+Measured on Linux (4 vCPU) at f67c478 (before) and on this branch (after). The Windows-only paths are covered by stubbed tests here and by the `windows-setup-e2e` job on `windows-latest`. Nobody has run this on a machine with Smart App Control on.
+
+| Check | Before | After |
+|---|---|---|
+| `scripts/build.sh` with a CSO publish failure injected | exit 86; no browse server bundle, no build stamp | exit 0; bundle and stamp written; failure recorded with stage and log |
+| `./setup --host codex` with the same failure | stops (exit 86) | finishes; prints `CSO publish step failed (exit 86) ...; previous CSO kept: <revision>` |
+| Same failure with `GSTACK_STRICT_BUILD=1` | exit 86 | exit 1 with the reason (CI keeps catching regressions) |
+| `browse --version` | started a browse server, then exited 1 | prints the build hash, exits 0, starts nothing |
+| `pdf --version` / `gstack-global-discover --version` | exit 1 (usage) | exit 0 |
+| Compiled binaries setup and `gstack-doctor` launch-check | 0 of 5 | 5 of 5 |
+
+### What this means for you
+
+Run `/gstack-upgrade` (or `git pull && ./setup`), then run `~/.claude/skills/gstack/bin/gstack-doctor`: its new `binaries` and `cso` rows show whether every compiled binary starts and whether /cso's helper is installed. On Windows with Smart App Control on, setup now lists the blocked binaries and the skills that need them, and points to the two workarounds that work today: run gstack inside WSL, or turn Smart App Control off. Signed binaries are the real fix and are tracked in `TODOS.md`.
+
+### Itemized changes
+
+#### Fixed
+- A failed /cso helper build or publish no longer stops `scripts/build.sh` or `./setup`. setup says which step failed (`probe`, `build` or `publish`), where the log is (`bin/.gstack-cso-build.log`), what still works, and the retry command (`bun run build:cso && ./setup`). When a failed publish restores the earlier helper, setup says `previous CSO kept: <revision>` and /cso keeps using it. `GSTACK_STRICT_BUILD=1` makes the failure fatal; the free-tests, make-pdf-gate and windows-setup-e2e builds set it. (#3071)
+- `scripts/build-cso.sh` clears its EXIT trap before it hands the stage to the native publisher, so on Git Bash the parent can no longer delete the staged files while the publisher runs. If the publisher cannot start, the parent cleans up and records why. Whether this was the cause of #3071's vanishing files is unproven. (#3071)
+- The Windows /cso toolchain probe and build prefer PowerShell 7 (`pwsh`) and fall back to Windows PowerShell 5.1. A probe that fails for another reason keeps its exit status and first output line (`windows-toolchain-probe`) instead of being labeled a missing Visual Studio install. (#3071)
+- `browse`, `find-browse`, `pdf` and `gstack-global-discover` answer `--version` before doing anything else, like `design` already did.
+- The sidebar terminal and the sidepanel's monospace text list Consolas and the Cascadia faces before the CJK fallbacks, so Windows no longer renders `C l a u d e`. (#2287)
+
+#### Added
+- setup on Windows runs each compiled binary's `--version` after the build. Binaries that cannot start are reported as blocked by Smart App Control or another application-control policy, with the skills that need them, the shell setup ran from, whether WSL is installed, how to undo it, and a new troubleshooting section. A binary that starts but fails is reported as a build problem. setup prints the raw Windows error beside its classification because that text is unverified. (#2595, #2124)
+- `gstack-doctor`: the `browse bundle` row says `blocked at launch` instead of passing, a new `binaries` row covers the other four compiled binaries, and a new `cso` row reads the build-result record.
+- README documents Smart App Control as a known issue and /cso as optional on Windows; `docs/troubleshooting.md` gains a Windows section and an entry for CSO build and publish failures.
+
+#### For contributors
+- `bin/gstack-launch-probe.sh` is the shared launch classifier (`native`, `blocked`, `broken`, `missing`) for setup and the doctor. `bin/.gstack-cso-build-result` is the CSO outcome record that `scripts/build-cso.sh` writes; setup removes it with the helper when a prerequisite is missing, so it never writes into a source checkout that needed no build. They are pinned by `test/gstack-launch-probe.test.ts`, `test/build-cso-result-record.test.ts`, `test/build-cso-nonfatal.test.ts`, `test/setup-cso-degrade.test.ts`, `test/setup-windows-launch-hint.test.ts`, `test/binary-version-probe.test.ts`, and new cases in `test/gstack-doctor.test.ts` and `browse/test/sidebar-ux.test.ts`.
+- `windows-setup-e2e` checks that all five binaries answer `--version`, and adds two forced CSO failures: fatal under `GSTACK_STRICT_BUILD=1`, and a completed setup with a doctor `cso` warning under `GSTACK_STRICT_BUILD=0`.
+- Deliberately not done: a `bun run` shim for blocked binaries. PowerShell callers could not use it, and it would load the calling project's `.env` and `bunfig.toml`.
+- Thanks to @dviolante for the #3071 report and its diagnosis, including the PowerShell 5.1 crash and the `pwsh` fix. Thanks to @tomfluff for the font fix (#2287, landed with original authorship). The Smart App Control diagnosis came from @knetics9000 (#2595, #2596), @smartjelic-sys (#2595), @pstilwell90 (#2124), @cko32002 (#2265) and @salluexez (#2127).
+
+## [1.91.59.0] - 2026-10-08
+
+**/autoplan's phase guard accepts a plan under a symlinked directory, and a failed snapshot init no longer blocks a corrected re-run.**
+
+The /autoplan publication guard checks that snapshot `init` reported the same active-plan and restore paths it was given. `init` reports canonical paths, with every directory link resolved, but the guard compared them against the command arguments as typed. On macOS `/tmp` and `/var` are links to `/private/tmp` and `/private/var`, so every plan under them, and any plan reached through a symlinked directory elsewhere, was denied with `init_mismatch` at the first phase. Separately, the guard stopped at the first `init` call that errored, so one bad call denied the whole session even after a correct `init` succeeded.
+
+### What this means for you
+
+Run `/gstack-upgrade`. `/autoplan` on a plan under `/tmp`, `/var/folders` or another symlinked directory now enters its phases instead of stopping at `init_mismatch`. If an `init` call fails, re-run the same command with the same three paths: the later success binds, and `init_failed` now tells you to do exactly that.
+
+### Itemized changes
+
+#### Fixed
+- The phase publication guard canonicalizes `init`'s `<active>` and `<restore>` arguments the same way `init` does before comparing them with its result. Writes and Edits to the active plan are matched by canonical path, so a pending Edit through a symlinked spelling still counts as pending. (#3072)
+- An errored `init` call is skipped. The guard denies `init_failed` only when the most recent `init` call errored, and the message says to re-run the same command. A mistyped snapshot-tool path is treated as an unbindable call rather than crashing the hook. (#3072)
+- `init_mismatch` explains that `init` returned paths that don't match its own arguments and no longer suggests re-running the same call. (#3072)
+
+#### For contributors
+- `bin/gstack-autoplan-snapshot.ts` exports `canonicalDestination`, the path computation `initializePlan` already used, so the guard and `init` share one definition. `init`'s output is unchanged.
+- New `PAX-3638` cases in `test/autoplan-publication-guard.test.ts` and `test/autoplan-init.test.ts` drive the guard through a symlinked fixture directory, so the bug reproduces on Linux: 9 of the 11 new guard cases fail against the previous hook. `docs/autoplan-guard-troubleshooting.md` gains a "Symlinked plan directories" section and updated `init_mismatch` and `init_failed` entries.
+
+Contributed by @wyatt-paxiv (#3072).
+
+## [1.91.54.0] - 2026-10-08
+
+**Your first /office-hours session gets the first-session closing again, and you see the design doc before you approve it.**
+
+/office-hours logged the session to your builder profile and then read the profile to choose its closing, so every run counted itself as history. A first-time user got the "welcome back" closing, never saw the introduction, and was asked how the assignment they had just been given went. Every later tier was one session early too. Separately, the approval question showed up while the design doc sat in a collapsed tool output, and a session that never wrote a doc could still be logged as a success.
+
+### What this means for you
+
+Run `/gstack-upgrade`, then start `/office-hours` on a new idea. Before the doc is saved you'll see a `Builder profile before this session:` line. On a first session it says `SESSION_TIER=introduction PRIOR_SESSION_COUNT=0`, and the closing is the introduction. `gstack-timeline-read --limit 1abc` now exits 2 and shows an example instead of quietly reading one event.
+
+### Itemized changes
+
+#### Fixed
+- /office-hours reads your builder profile before it logs the session and carries the earlier tier, count and last assignment to the closing. This session is counted as the prior count plus one. If the profile can't be read, it treats the session as your first and tells you so. A returning greeting skips "last time" when the profile has no last assignment or project, and just says "Welcome back." (#2801)
+- /office-hours prints the complete design doc in the conversation before asking you to approve it. (#879)
+- /office-hours logs `success` only when this run's own design doc exists and isn't empty. It checks the doc's exact path under your gstack state root. A session that ends without a doc is logged as `abort` or `error` with failed step `design_doc`. (#1049)
+- `/plan-ceo-review`, `/plan-eng-review`, `/plan-devex-review` and `/autoplan` skip the "run /office-hours first?" offer in spawned and headless sessions, where nobody can answer it, and continue with the standard review. (#1958)
+- `gstack-timeline-read --limit` takes only a positive integer. A missing value, `0`, `-5`, `abc` or `1abc` exits 2 with `--limit must be a positive integer (got '<value>'); example: --limit 20`, whether or not the project has a timeline. Without the flag you still get 20 events. (#1723)
+- Skill start prints `SESSIONS: N`, the number of gstack sessions active in the last two hours, so CLAUDE.md rules that read the session count have a value. (#1651, part A)
+
+#### For contributors
+- New tests in `test/gen-skill-docs.test.ts` run the rendered office-hours profile read, session log and design-doc check against a temporary state root. `test/timeline.test.ts` covers each bad `--limit` on empty and populated histories. `test/gstack-skill-start.test.ts` covers the `SESSIONS` count. The office-hours, plan-eng-review and autoplan parity caps include the measured growth.
+
+Contributed by @kikearciniegas (#2801), @kichinosukey (#879), @RyanAlberts (#1116), @walton-chris (#1049), @aviraldua93 (#1958), @jbetala7 (#1723, #1724), @TJ-NomoAI (#1651) and @0xDevNinja (#1747).
+
+## [1.91.52.0] - 2026-10-08
+
+**`/qa` says exactly what shape `annotations.json` takes, and the `qa-quick` gate eval stops timing out at its 300 s budget.**
+
+Before writing its report, `/qa` records an `annotations.json` file and runs `gstack-qa-evidence materialize` on it. The section that describes the file listed its fields as `{evidence: [...], limits}` and told browser-only runs to put "checkpoints in limits", but it never said what type `limits` is. The validator only accepts a non-empty array of strings. In 11 of 15 recent `qa-quick` CI transcripts, the agent's first attempt wrote `limits` as an object, the call failed, and the agent had to retry. Anyone running `/qa` or `/qa-only` could hit the same retry.
+
+`qa-quick` runs on every PR that touches `browse/src`. It passed 13 of 15 recent CI runs in 206-280 s, and the other 2 hit the 300 s session timeout. Two parts of the case's own setup were adding work. Its fixture directory was not a git repository, so in all 15 runs `materialize` first failed with "revision is required when git rev-parse HEAD is unavailable". Its prompt also put the fixture's `/page1` and `/page2` links in scope. Both links return 404 on the test server, so each run spent part of its 30 s probe window, and its wrap-up, investigating and reporting them. The session budget, the thresholds and the `/qa` workflow are unchanged.
+
+### The numbers that matter
+
+Diagnostic `ship-measure` trials in the CI image (Claude Code 2.1.292, Bun 1.4.2, `--jobs 2`, `CI=true`). They never change a recorded verdict.
+
+| `qa-quick` | Before (CI, 15 runs) | After (10 trials) |
+|---|---|---|
+| Passed | 13 of 15 | 10 of 10 |
+| Pass duration, median (range) | 252 s (206-280 s) | 187 s (155-256 s) |
+| Mean cost per trial | $1.75 | $1.46 |
+| Runs with a failed `materialize` call | 15 of 15 | 0 of 10 |
+
+### What this means for you
+
+`/qa` and `/qa-only` now get `annotations.json` right on the first try, which saves a failed tool call near the end of a run. A browse PR's `qa-quick` check should no longer time out. Its slowest measured trial (256 s) sits right at the 85% headroom line (255 s), so the weekly gate's headroom alarm may still flag the case now and then.
+
+### Itemized changes
+
+#### Fixed
+- `qa/sections/exploratory.md` §4 (shared by `/qa` and `/qa-only` through the `QA_EXPLORATORY` resolver) shows `limits` as `["checkpoint 001"]` and says it is a non-empty string array, never an object. That matches what `lib/qa-evidence.ts` already enforces.
+
+#### For contributors
+- `qa-quick` commits its fixture directory to git before the session starts, as `qa-only-no-fix` already does. `/qa`'s clean-tree check and the evidence recorder's revision now work the way they do in a real repository.
+- `qa-quick` limits Quick scope to the fixture page itself: its load, console health and rendered content. The two same-origin links are listed as untested coverage. The qa-b6/b7/b8 and qa-fix-loop cases still cover link following and defect detection.
+
+## [1.91.47.0] - 2026-10-08
+
+**`/careful` and `/guard` now check PowerShell commands, and `/freeze` now covers notebook edits.**
+
+On Windows, Claude Code runs shell commands through its PowerShell tool, and on a machine without Git Bash that is the only shell it has. `/careful` and `/guard` listened only to the Bash tool, so they never saw those commands: `Remove-Item -Recurse -Force C:\proj` and `rmdir /s /q C:\proj` went through with no prompt. The hook also had no PowerShell or cmd patterns at all. Separately, on every platform, `NotebookEdit` was missing from the `/freeze`, `/guard` and `/investigate` hooks, and the freeze check read only `file_path`. A notebook edit outside the boundary was allowed.
+
+### The numbers that matter
+
+Checked by piping hook payloads into the real scripts (`test/hook-scripts.test.ts`) on Linux.
+
+| Check | Before | After |
+|---|---|---|
+| PowerShell tool: `Remove-Item -Recurse -Force C:\proj`, `rmdir /s /q C:\proj` | allowed (the hook never ran, and had no pattern) | ask, naming the matched pattern |
+| Bash: `pwsh -c "Remove-Item -r -fo x"`, `cmd /c "rd /s /q x"`, `cmd //c "r^d /s /q x"` | allowed | ask |
+| `-EncodedCommand`, `iex`, `Start-Process pwsh`, `& $cmd`, `[IO.Directory]::Delete` | allowed | ask, explaining that encoded or dynamic PowerShell can't be inspected |
+| `NotebookEdit` on `/etc/x.ipynb` with `/freeze` set elsewhere | allowed | denied, naming the tool, `notebook_path`, the boundary and `/unfreeze` |
+| Negative controls (`git branch -d`, `ord`, `--del`, a `/rd/` path, `Remove-Item x.txt`), on Bash and PowerShell | allowed | still allowed |
+| New #3067 hook tests run against the old scripts | — | 54 of 98 fail; the other 44 (controls and unchanged behavior) pass on both |
+
+### What this means for you
+
+Run `/gstack-upgrade`, then start `/careful` in a new session. On Windows, ask Claude to run `Remove-Item -Recurse -Force .\scratch` through PowerShell: you'll get an approval prompt that names `ps_remove_item`. PowerShell coverage is best-effort, because PowerShell can build a command at runtime that string matching can't see. If you need a hard stop, add Claude Code permission deny rules, such as `"deny": ["PowerShell(Remove-Item *)"]`. Those rules parse PowerShell and match aliases. The hooks run through `bash`, so on Windows they still need Git Bash, which gstack already requires.
+
+### Itemized changes
+
+#### Fixed
+- `/careful` and `/guard` register a `PowerShell` hook matcher beside `Bash` (#3067).
+- `check-careful.sh` runs one PowerShell and cmd pattern table. It covers commands from the PowerShell tool, and the rest of any Bash command from the point where it launches `pwsh`, `powershell` or `cmd` (including Git Bash's `cmd //c`). Matching ignores case and covers aliases (`rm`, `ri`, `del`, `erase`, `rd`, `rmdir`). Command names match only where a command starts. Parameters match any prefix PowerShell accepts (`-r`, `-rec`, `-fo`, `-forc`, `-Recurse:$true`). cmd `^` escapes and PowerShell backtick escapes are removed before matching. The covered commands are `Remove-Item` with `-Recurse` or `-Force`, `rd`/`rmdir`/`del`/`erase` with `/s`, `Format-Volume`, `Clear-Disk`, `Clear-Content` (the same as `truncate`), `[IO.Directory]::Delete` and `[IO.File]::Delete`, plus asks for `-EncodedCommand`/`-enc`, `Invoke-Expression`/`iex`, `Start-Process` of a shell and `& $cmd`. Patterns that apply to any shell (`git push --force`, `DROP TABLE`, and the rest) apply to PowerShell commands too.
+- `/freeze`, `/guard` and `/investigate` register a `NotebookEdit` matcher beside `Edit` and `Write`. `check-freeze.sh` reads `notebook_path` when `file_path` is absent (#3067). Every freeze denial now names the tool, the path field and `/unfreeze`.
+- PR #1110's bypass strings (`echo hi; rm -rf ~`, `echo $(rm -rf /)`, `git commit -m "$(rm -rf ~)"`) are pinned as negative controls and still ask.
+
+#### For contributors
+- `gstack_hook_extract_tool` in `careful/bin/hook-extract.sh` reads `tool_name` and the first non-empty field in one parser call, so dispatch adds no process per command. A `check-careful.sh` paired with an older helper falls back to the Bash-only reader. A `check-freeze.sh` paired with an older helper denies as out of date.
+- The payload shapes come from Claude Code's docs. PowerShell sends `tool_input.command` (hooks reference, "PreToolUse > PowerShell"). NotebookEdit sends `tool_input.notebook_path` (Agent SDK `NotebookEditInput`). `MultiEdit` no longer appears in the tools reference, the hooks reference or the SDK tool list, so it gets no matcher.
+- The careful and freeze hook matchers are separate per-tool entries, matching the existing `Edit`/`Write` entries. Claude Code treats them the same as one `Bash|PowerShell` list, and the safety-prose parser in `scripts/gen-skill-docs.ts` keeps reading them.
+- `test/hook-scripts.test.ts` is now named Windows coverage in `scripts/lib/windows-curation.ts`. Its symlink, newline-path and POSIX-`PATH` cases are skipped on win32.
+- The hook payload reader writes bytes from Python. Windows text-mode output had turned `PowerShell` into `PowerShell\r`, so the table never ran there; the first `windows-free-tests` run of these tests caught it. `hook-extract.sh` also finds `gstack-state-root.sh` when sourced through a `C:\` path.
+- The PR paid lane's `office-hours-auto-mode` case matched 0 tests because its Bun test name differs from its id. `CASE_TEST_NAMES` now maps it, and `test/test-pr-profile.test.ts` checks that every audited PR-profile case is addressable by name.
+- `careful/bin/check-careful.sh` is listed in `FREE_ONLY_PR_FILES`. No paid fixture runs it, and as an unknown dependency it used to restore the full paid gate on every `/careful` change.
+- Thanks to @jtheyse for the #3067 report and its suggested fix shape, @JiayuuWang for PR #1110, whose bypass strings became negative controls, and @BenjaminDSmithy for PR #3066's frontmatter hook-check derivation. The new matchers pass #3066's `bin/gstack-hook-check` and its test as well as main's.
+
+## [1.91.45.0] - 2026-10-08
+
+### Added
+- Choose separate model tiers for planning and implementation. Independent plan reviews default to Fable 5.1 or GPT-6 Astra; implementation handoffs recommend Opus 5.5 or GPT-6.1 Sol without switching your session. Explicit model choices still win, and `plan_review_tier smart` or `host` provides an alternative to the frontier default.
+- Inspect effective models, their sources and copyable pin/reset commands with `gstack-models`. Six settings use the existing configuration store, with fail-closed validation and a notice before the first affected review. See the [model-policy guide](docs/model-policy.md).
+- Policy inspection reports native Windows paths and rejects non-directory or unreadable state roots rather than silently selecting defaults.
+- Get weekly advisory checks of official model recommendations and retirement notices. One tracking issue retains source evidence and lifecycle history; upgrades remain human-reviewed, with no automatic model changes or paid benchmarking.
+
+### Fixed
+- Codex model probes retain up to sixteen selections, serialize concurrent misses and preserve newer entries when another probe finishes later. Plan-review readiness and execution share one deadline, and failed model choices point to the setting that actually selected them.
+- `/review` and `/ship` explicitly require prerequisite QA instructions to be read in earlier responses before a probe, including its evidence capture.
+
+## [1.91.42.0] - 2026-10-08
+
+**/cso lifts its file-count ceiling: repositories with tens of thousands of files reach the audit.**
+**Repositories with more than 64 MiB of tracked source, or with a tracked symlink, are still refused, and the message now says which limit applied and what to do.**
+
+/cso refused any repository with more than about 3,100 files before an audit started, with "Snapshot manifest exceeds the 1 MiB private-state admission limit" (#3068). The snapshot's file list shared a 1 MiB limit with every other private file /cso keeps, and so did the report it writes, the list of files with secret-like findings, and Git's own file listing. The snapshot list now has its own 16 MiB limit (about 50,000 files) and is written compactly. Per-file lists in the report and the evidence file keep their first entries and end with one line saying how many more there are. The counts in the report stay exact.
+
+### The numbers that matter
+
+Shallow clones measured on 2026-10-08 with `start --offline`, before and after this release:
+
+| Repository | Files | Tracked source | Before | After |
+|---|---|---|---|---|
+| sveltejs/svelte | 9,182 | 6.9 MiB | refused (file list over 1 MiB) | audit starts; 2.8 MiB file list, 10 KB report |
+| facebook/react | 7,252 | 38.7 MiB | refused (file list over 1 MiB) | audit starts; 2.3 MiB file list, 53 KB report |
+| laravel/framework | 3,439 | 25.7 MiB | refused (file list over 1 MiB) | audit starts; 1.0 MiB file list, 30 KB report |
+| django/django | 7,085 | 44.0 MiB | refused (4 tracked symlinks) | refused (symlinks); starts once they are removed |
+| rails/rails | 5,007 | 38.1 MiB | refused (1 tracked symlink) | refused (symlink); starts once it is removed |
+| hashicorp/terraform | 5,562 | 25.6 MiB | refused (10 tracked symlinks) | refused (symlinks); starts once they are removed |
+| grafana/grafana | 23,749 | 210.7 MiB | refused (Git file listing over 1 MiB) | refused (symlinks); then the 64 MiB source cap |
+| microsoft/vscode | 20,238 | 540.0 MiB | refused (Git file listing over 1 MiB) | refused (symlink); then the 64 MiB source cap |
+
+On a synthetic 5,000-file repository with long nested paths, where most files are excluded or withheld and 1,000 files carry secret-like strings, the report is 267 KB and the evidence file 524 KB. Unbounded, the same lists took 1.97 MB and 1.68 MB, over the 1 MiB limit. A free test drives that shape through start, inspect, findings, finish and recheck.
+
+### What this means for you
+
+Run `/gstack-upgrade`, then run `/cso` on a repository with more than 3,100 files: the audit starts instead of stopping at the snapshot. If /cso still refuses, the message names the limit (the 16 MiB snapshot list, the 64 MiB source cap, or a symlink), the measured size, what counts toward it and the next step. No setting raises these limits yet; the 64 MiB source cap is tracked in #2993, and `docs/troubleshooting.md#cso-capacity` explains all three.
+
+### Itemized changes
+
+#### Fixed
+- /cso refused repositories with more than about 3,100 files before an audit. The snapshot file list is written compactly and capped at 16 MiB; every other private file keeps its 1 MiB limit. Snapshot lists written by earlier releases still load in recheck and inspect. (#3068)
+- Report coverage gaps, exclusions and transformations, and the evidence file of secret-like findings, keep their first entries and end with an omitted count, so a large repository no longer overflows the report partway through an audit.
+- Git's file listings during capture are allowed up to the snapshot list size, so repositories past roughly 11,000 to 23,000 files, depending on path length (7,000 to 10,000 with `--diff` or `--base`), no longer fail with "Could not read bounded Git metadata: ls-tree exceeded the output limit".
+- The snapshot-list and 64 MiB source-cap errors state the measured value, the limit, what counts toward it, the next step and the #2993 link. A single file that would cross 64 MiB now gets the same message before it is read. (#2993)
+
+#### For contributors
+- `readJson` takes a per-artifact size cap. `readSnapshotManifest(dir)` is the only reader of `snapshot.json`, and a source test fails on a direct read.
+- `boundedList` in `lib/cso/state.ts` bounds a per-entry list by the pretty-printed bytes it adds and appends one omitted-count item.
+- `runProcess` lets raw callers opt in to up to 16 MiB of output; everything else keeps the `MAX_OUTPUT` clamp, which stays 1 MiB.
+- Thanks to @almoatasemm for the report (#3068) and @saanjay for the capacity diagnosis of the manifest, reader and source caps (#2993).
+
+## [1.91.38.0] - 2026-10-07
+
+**`/ios-qa` works on iPads, and a dropped USB route no longer restarts the app you are testing.**
+
+Three things went wrong on real devices. The daemon accepted only iPhones, so a paired iPad was refused with "not an iPhone" (#2743). Once a session was running, any blip in Xcode 26's CoreDevice tunnel made the daemon start over: the app had already deleted its one-use boot token, so the only way back in was `devicectl process launch --terminate-existing`, which threw away the app's in-memory QA state in the middle of a test flow (#1975). And if the app could not write that boot token in the first place, `StateServer` failed silently with `try?`, so the daemon kept relaunching an app that could never let it in (#1837).
+
+### The numbers that matter
+
+Measured with the simulated-device tests in `ios-qa/daemon/test/daemon-integration.test.ts` (a `devicectl` emulator plus a StateServer with the real token rules). Real iPhone and iPad runs have not been done for this release.
+
+| Check | Before | After |
+|---|---|---|
+| Paired iPad on USB, no target set | refused ("not an iPhone") | bootstraps |
+| iPhone and iPad both on USB, no target set | silently drives whichever devicectl listed first | stops and lists both UDIDs with a ready `export GSTACK_IOS_TARGET_UDID=...` line |
+| One route drop during a session | 1 `--terminate-existing` relaunch, in-app state lost | 0 relaunches, state kept, same bearer |
+| Three requests failing on the same drop | one bootstrap and one relaunch | one shared recovery, no relaunch |
+| App that cannot write its boot token | silent; daemon relaunches it once, then `boot_token_unavailable` with no cause | `NOT READY` in the device log; daemon names the cause and does not relaunch |
+
+### What this means for you
+
+Run `/gstack-upgrade`, then rerun `gstack-ios-qa-regen` in your app so the new `StateServer` lands in `DebugBridge/`. Plug in an iPad and run `/ios-qa`: it connects like an iPhone. With an iPhone and an iPad both plugged in, the daemon prints both UDIDs and the `export GSTACK_IOS_TARGET_UDID=<udid>` line to run. When the tunnel drops mid-session, the daemon log says `tunnel recovered: kept the session` and the app keeps its state. A restarted daemon still relaunches the app once, because a new daemon has no session bearer.
+
+### Itemized changes
+
+#### Fixed
+- **Physical iPads are accepted** (#2743). Device selection takes iPhones and iPads (platform iOS or iPadOS); errors say "iPhone or iPad". Watches, Vision Pro and other devices are still refused. Contributed by @loulanyue (#2779), reported by @Artic0din.
+- **Two devices are never guessed between.** When an iPhone and an iPad (or any two devices) tie for the default, bootstrap fails with `multiple_devices`, lists each device with its UDID, and prints the export line.
+- **A route drop keeps the session** (#1975, finding 1). On `503 device_disconnected` or `504 upstream_timeout` the daemon re-selects the device with the same rules, re-resolves the tunnel address for the same UDID, checks the unauthenticated `/healthz` owner, and probes `/state/snapshot` with the bearer it already holds. If the app accepts it, the session continues. It bootstraps only when the app rejects the bearer (401, the app was relaunched), the app is confirmed not running (one normal launch), or a different device is now selected. The bearer is only sent to the address `devicectl` reports for that UDID, or to the address the session already used, never to another device. Concurrent failures share one recovery, and a tap or other mutation whose response was lost is still never replayed. Diagnosis by @jpb33333 in #1975; @Bmathews721 traced the same rotate-then-rebootstrap failure in #1796.
+- **A failed boot-token write is loud** (#1837). `StateServer.start()` writes the 0600 token file in a `do`/`catch`, logs the path and error (never the token), logs `gstack-ios-qa-bootstrap NOT READY`, and reports `boot_token_error` on `/healthz`. The daemon turns that into `boot_token_unavailable` with the cause instead of relaunching the app. Reported by @aweevenson-sea.
+
+#### Docs
+- `/ios-qa` no longer tells you to capture the boot token from `os_log`; the token left `os_log` in v1.65.0.0. The stale comments in `StateServer` are gone too (#1837, #1735 item 7).
+- Source-control guidance for the generated `DebugBridge/` package: commit it or ignore it, never hand-edit it (#1735 item 7, reported by @frank-alvarado).
+- A new "Known limits" section: in-process synthesized touches do not reach SwiftUI `DragGesture` on iOS 26 and `/swipe` only scrolls a `UIScrollView` (#1975 findings 2 and 3, @jpb33333); on iOS 26.3.1 `/elements` returns only the hosting views (device data from @sternryan in #1755); iPad Stage Manager is not verified.
+- The iOS how-to, README and skill index cover iPads, `GSTACK_IOS_TARGET_UDID`, and the new failure rows.
+
+#### For contributors
+- `selectDevice()` and `recoverTunnel()` in `ios-qa/daemon/src/tunnel-bootstrap.ts`; `refreshTunnel` in `startDaemon()` coalesces refreshes per failed tunnel. The CLI wiring is `deviceTunnelSource()` in `ios-qa/daemon/src/index.ts`, so tests drive exactly what the daemon runs.
+- `ios-qa/daemon/test/fake-device.ts` simulates a device: a `devicectl` emulator plus a StateServer with the one-use token file, rotation, relaunch and black-holed requests.
+- Pinned by `ios-qa/daemon/test/daemon-integration.test.ts` (live route drop, lost tap, concurrent drops, stopped app, Xcode relaunch, device change), `ios-qa/daemon/test/tunnel-bootstrap.test.ts` (iPad, Watch, multiple devices, recovery address and owner rules, token-write error) and `test/ios-qa-stateserver-hardening.test.ts` (no silent `try?` write, no os_log claim) on both the template and the fixture copy.
+- Not verified here: Swift compilation of the changed `StateServer` (only `swiftc -parse` ran; no Apple SDK), and any iPhone or iPad run.
+
+## [1.91.36.0] - 2026-10-07
+
+**Python and Rails repairs can now reach `runtime_tested` and replay, and a killed verification leaves nothing behind.**
+
+Runtime verification had four defects that the private evaluator's Lane R found on its Python, Rails and watchdog checks. First, a verified Python repair could never replay: offline preparation wrote timestamped `.pyc` bytecode, so every preparation hashed differently and `replay` reported "Replay changed verification outcomes, preparation, or provenance inputs". Second, Rails replays failed the same way, because RubyGems build logs record a random temporary directory. Third, no Rails verification could finish on a 4-vCPU host: an attempt prepares the application twice, each Rails preparation compiles native extensions for about four minutes, and the attempt watchdog, executor and assertion witness were each capped at five minutes. Fourth, after a helper was killed mid-verification, the watchdog removed every container, but `resume` and `finish` left the dead attempt's control directory and archive staging in the run directory.
+
+### The numbers that matter
+
+Measured on amd64 (4 vCPU) with `gstack-cso` built from 28f1385 plus these fixes, the staged runtime images from staging run 37555192492, and the evaluator's private corpus.
+
+| Check | Before | After |
+|---|---|---|
+| Two Python offline preparations of the same app | prepared dependency trees differ | 0 differing files |
+| One Rails offline preparation | about 245 s | unchanged |
+| Rails verification attempt | ended by the 300 s watchdog during its second preparation | certifies within the 900 s bound |
+| Helper SIGKILL during preparation or with the app running, then `resume` and `finish` | `preparation-execution` (and `archive-staging`) not empty | empty |
+
+### What this means for you
+
+Python projects locked with `requirements.txt` or `uv.lock`, and Rails projects with native gems, can now be verified and replayed. Node and Bun keep their 300-second attempt. If a verification is interrupted, `resume` now reclaims its scratch once the watchdog has recorded cleanup.
+
+### Itemized changes
+
+#### Fixed
+- Python offline preparation sets `SOURCE_DATE_EPOCH`, so `venv`, ensurepip and pip write checked-hash `.pyc` files and two preparations of the same app produce identical trees.
+- The prepared manifest and dependency hashes leave out RubyGems and mini_portile build diagnostics (`extensions/**/gem_make.out`, `extensions/**/mkmf.log`, `gems/*/ext/**/tmp/**/*.log`). These logs name random build directories and are never loaded; the compiled extensions stay in the identity.
+- A Rails verification attempt and a Rails replay get 900 seconds instead of 300, still capped by the run's reporting deadline. The attempt watchdog, the Docker verification executor and the assertion witness lifetime now share that one bound (`MAX_VERIFICATION_ATTEMPT_MS`) instead of each enforcing 300 seconds. Other stacks keep 300 seconds.
+- `resume` and `finish` reclaim a killed attempt's `supervision`, `preparation-execution`, `archive-staging`, `archive-materializations` and `verification` scratch. They do this under the run lock and only when no detached watchdog cleanup is still pending.
+
+#### For contributors
+- `preparedIdentityEntry()` in `lib/cso/preparation-executor.ts`, `verificationAttemptMs()` in `lib/cso/cli.ts`, `MAX_VERIFICATION_ATTEMPT_MS` in `lib/cso/contracts.ts`, and `reclaimDeadAttemptScratch()` in `lib/cso/state.ts`. They are pinned by `test/cso-preparation-executor.test.ts`, `test/cso-preparation.test.ts`, `test/cso-cli-lifecycle.test.ts`, `test/cso-witness.test.ts` and `test/cso-snapshot-state.test.ts`.
+
+## [1.91.34.0] - 2026-10-07
+
+**/autoplan works again on current Claude Code, including long sessions and `claude --bg`.**
+**The pre-push scan and the artifacts sync stop raising false alarms, and neither got weaker.**
+
+On Claude Code 2.1.29x, /autoplan refused every reviewer it dispatched and said "retry", which never helped. Two Claude Code changes caused it. In interactive sessions the fork-subagent setting drops `run_in_background` from the copy of the reviewer dispatch that hooks see, while the session journal keeps it, so the guard decided the call had been tampered with. Claude Code also often writes a tool call to the journal only after the hook has returned, so the guard waited two seconds for a record that never came. Sessions with a journal over 32 MiB were refused outright. The pre-push scan flagged your own email and emails already in the repo's history. One flagged file stopped the artifacts sync entirely, without telling you: one contributor's machine went 18 days without a push.
+
+### The numbers that matter
+
+All measured on Claude Code 2.1.292 unless marked otherwise. The paid runs are single trials.
+
+| Check | Before | After |
+|---|---|---|
+| Reviewer dispatches allowed in a default interactive session | 0 (each denied, "retry") | all; the live PTY case logs 3 verified allows |
+| Same, through `claude --bg` + `claude attach` | 0 | 3 verified allows |
+| Largest session journal the guard accepts | 32 MiB | any size; only a single record over 32 MiB counts as too large |
+| One guarded read of a 120 MiB journal (4 vCPU Linux, appending during the read) | refused | 0.43-0.87 s, 170-235 MiB peak memory |
+| Resumed 102 MiB session entering Phase 1 | refused | allowed, in 70 s |
+| Replay fixtures shaped like the reported timelines | 3 of 28 pass (the controls) | 28 of 28 |
+| Codex reviews listing 7 and 8 High/Medium findings | reported `VERDICT: clean` | reported as findings |
+| Artifacts sync with one flagged file | nothing pushes, no notice | that file waits, the rest pushes, and every skill start says so |
+
+### What this means for you
+
+Run `/gstack-upgrade`. No restart is needed. An /autoplan run already in progress may get one denial asking you to publish the phase report in its own message; do that and continue. You no longer need `CLAUDE_CODE_FORK_SUBAGENT=false` (keeping it is harmless). Then try `~/.claude/skills/gstack/bin/gstack-doctor` to see what's ready before you start a skill.
+
+#### If /autoplan denied every reviewer on Claude Code 2.1.29x
+
+The guard now ignores only the one key Claude Code drops. When the current call isn't in the journal yet, it checks the call Claude Code handed to the hook against everything already written. A phase report counts once something later in the journal follows it, so each phase now publishes its report in its own message, whose only tool call is `true autoplan-published <phase>` (no output, no permission prompt).
+
+When Claude Code itself leaves a call impossible to check, /autoplan continues and prints a visible warning instead of blocking. That covers an unknown journal shape, a journal that never catches up, a rewritten journal, an oversized record, or a newer Claude Code that drops another key. A changed reviewer prompt, a model override, a skipped report or any other integrity problem is still refused. Every message names a code with its own section in `docs/autoplan-guard-troubleshooting.md`. If a denial still appears, the fallback is `/plan-ceo-review`, then `/plan-devex-review`, then `/plan-eng-review`; or `/context-save`, a new session, `/context-restore`, then `/autoplan <plan path>`.
+
+#### If the pre-push hook warned on your own email
+
+The scan no longer reports your own address (`git config user.email`) or addresses already in the destination's history: authors and committers of the commits you push, of the remote branch you replace, and, for a new branch, of that remote's other branches. Mailmapped addresses count too. Each MEDIUM finding now names its rule, file and line, never the value. Addresses that only some other remote knows still report, and HIGH secrets still block. To allow a team or support address in one repo, run `git config --add gstack.redact.allowEmail support@example.com`. If the hook says "existing-email suppression was limited for this push", it couldn't read the history within 5 seconds, so known authors may be listed that one time.
+
+#### If artifacts sync stopped pushing
+
+Run `~/.claude/skills/gstack/bin/gstack-brain-sync --status`. Each held file is listed with the scanner rule that matched and two fixes. Edit the file and the next skill run syncs it. If you never want it synced, run `~/.claude/skills/gstack/bin/gstack-brain-sync --skip-file <path>`; undo that with `--unskip-file <path>`. A git index lock left behind by a killed sync is now cleared once it is 10 minutes old.
+
+### Behavior changes you may notice
+
+- **/ship opens the PR early in repos that use Greptile.** That means a `.greptile/` folder, a `greptile.json`, or Greptile comments on PRs in the last 90 days. /ship pushes and opens a draft as soon as its tests pass, Greptile reviews while /ship runs its own checks, and /ship waits up to 10 minutes for that review, then folds the comments into the same pass. On a public repo it asks once first, and remembers your answer for that repo. If /ship stops partway, the draft stays open with a comment saying why. To keep the old order, run `~/.claude/skills/gstack/bin/gstack-config set ship_greptile_early false`.
+- **Outside reviews that list findings without a tag, a severity label or a "no issues" statement show `unverified`, never `clean`.** Severity labels such as `High:` or `Severity: Medium` now count the same as `[P1]`-style tags.
+- **Skills run the Codex probe as a command.** Skills rendered before this release still source it. That keeps working, but prints one line saying it is deprecated; sourcing stops working in a release on or after 2026-10-21. `/gstack-upgrade` re-renders them.
+- **Browser skills offer a tab you're already signed in to** (title and origin only, for the site you named). They attach only after you confirm it once, instead of looping on "sign in again" for apps that keep the session in the tab or URL.
+- **/context-restore no longer hands you an older checkpoint without saying so.** When another branch's worktree saved a newer checkpoint for the same task, restore shows both and proposes the newer one. Generic titles like "wip" need a matching ticket number. Restoring from a folder above a repo also offers saves made in that repo.
+
+### Itemized changes
+
+#### Added
+- `bin/gstack-doctor`: one row each for install, state root, Bun, hooks, Codex (with the last cached model check and its age), artifacts sync, the browse bundle, the Claude Code version, your largest session journal, and the last five /autoplan guard codes. Each row reads ok, warn, not configured or fail, and only fail makes the exit code non-zero. Every fix line is a full path you can paste. It spends nothing unless you add `--live`. `./setup --status` gains a Codex row and ends with the doctor's path, and a new bug-report issue template asks for the doctor's output.
+- `bin/gstack-post`: posts PR and issue comments, replies, titles, bodies and new PRs or issues. Every value goes to `gh` or `glab` as an argument, never through a shell string, so a title like `--repo evil/x` is posted as text. It scans exactly the bytes it sends: a credential is refused, and a MEDIUM finding needs a confirmation token tied to those exact bytes. /ship, /spec and Greptile replies post through it.
+- `gstack-codex-probe` subcommands: `select-model`, `check-auth`, `show-sandbox`, `check-sandbox`, `probe-model`, `check-version`, `show-first-use-notice`, `run-with-timeout`, `log-event`, `log-hang` and `help`.
+- `gstack-brain-sync --unskip-file <path>` and `--attention`. The `--status` JSON gains `held` (path, rule and fixes for each held file), `held_count`, `drainable`, `last_drain_at` and `last_push_at`.
+- Every /autoplan guard decision, allow or deny, is logged without content to `~/.gstack/analytics/autoplan-guard.jsonl` (the last 1,000 lines are kept).
+- `ship_greptile_early` config key (default `true`).
+
+#### Changed
+- CI runs Claude Code 2.1.292 (was 2.1.284). A daily `autoplan-schema-canary` installs the newest Claude Code release and fails when its hook payload and journal record disagree in a new way.
+- Question tuning, /plan-tune and brain saves pass your words through a file. /plan-tune once again records what you said when you tune a question.
+- Phase reports in /autoplan are published in their own message, before the next phase starts in a later one.
+
+#### Fixed
+- /autoplan's publication guard on Claude Code 2.1.29x, in the foreground and with `--bg`: the dropped `run_in_background` key, a current call not yet in the journal, journals over 32 MiB, and a background reviewer that finishes after the turn ended. (#3062, #3050)
+- The pre-push scan's false alarms on your own email and on emails already in the repo history. MEDIUM findings now name rule, file and line. (#3060)
+- Artifacts sync: one flagged file no longer blocks every push. Decision logs and their active snapshots are held together, so the remote never gets half of a pair. Every gstack writer to the sync repo shares one lock. A failed commit keeps the queue. Undecodable bytes can no longer pass the scanner as clean. The pre-commit hooks written by init and restore now catch `Bearer`/`Basic`/`Token`-prefixed JSON auth headers, like the drain does. (#3055)
+- The outside-review classifier reported reviews with severity words and no `[Pn]` tags as clean.
+- /context-restore picked an older checkpoint from a nested repo or a task worktree. (#3065)
+- Browse cookbook: the script mistakes that look like page bugs (non-serializable `evaluate` results, a top-level `return`, `pg.press`, empty DOM reads). (#3063, #3064)
+- `ship-measure report` no longer crashes on a measurement saved by v1.91.32.0; it lists that round as an older format to re-measure.
+- The paid shared-code cases recognize Claude Code 2.1.292's own internal git probe, which now disables every git hook by name, instead of reading it as an unguarded git call from the skill.
+- Credits in the v1.64.0.0 entry: the extension token fix (#1822) goes to @Mike-E-Log, and the polyfill `exited` promise (#1743) to @habassa5. (#3054)
+
+#### For contributors
+- The guard's reason codes, dispositions and anchors live in `autoplan/bin/guard-reasons.ts`. The journal reader is `lib/claude-owned-journal.ts` (two-pass, append-tolerant) over the shared extractor `lib/claude-journal-records.ts`, and `autoplan/bin/guard-journal.ts` holds the invocation window. A free test fails on any denial that advises a retry without naming what to do first.
+- New paid cases: `autoplan-guard-pty` (gate, haiku) and `autoplan-long-session` (periodic). `autoplan-schema-canary` runs daily from `evals-periodic.yml`, or on dispatch with `schema_canary_only: true`. `scripts/measure-journal-read.ts` and the dispatch-only `measure-journal-read.yml` record read latency and memory.
+- `gstack-post`, the probe subcommands and `gstack-greptile-early` are not supported on native Windows yet; their CLI tests are excluded from the curated Windows subset, and the in-process tests for `gstack-post`, Greptile detection and the doctor run there.
+- Thanks to @yolo-jared and @crblabs (#3062), @akmandhania (#3060), @v639dragoon (#3055), @tomg65 (#3063, #3064, #3065), @Mike-E-Log (#3054) and @dgrant (#3020).
+
+## [1.91.33.0] - 2026-10-06
+
+**A red eval case now gets one clear verdict from its measurement: meets, qualified, extend once, or fix.**
+**A weekly sweep measures main's flakiest gate cases before any ship hits them.**
+
+/ship already measured a red case alone before rerunning the gate, but every 8 out of 10 was "below target", even when both reds were a provider outage. Now the measurement follows one bar. 9/10 meets it. 8/10 meets it as qualified when every red is a proven provider error, judge noise at the threshold, or a model miss with a cited transcript line. 7/10, or an 8/10 that does not qualify, gets exactly one more batch on the identical tree and is decided once on all 20 trials. Anything else, and any timeout, hang, regression or known fixable cause, is a fix round. Separately, a new weekly workflow picks the gate cases that cost the gate's all-green chance the most and measures them on main, with a hard $150-a-week cap.
+
+### The numbers that matter
+
+The bar numbers are binomial for a case whose true per-trial pass rate is p (rule kind, 10 trials). The sweep numbers come from `bun run scripts/ship-measure.ts sweep --dry-run` against main's pass-rate history on 2026-10-06.
+
+| Case with true pass rate p | Clears the bar in one batch | Clears it with one extension (reds unqualified) | Clears it when every red qualifies |
+|---|---|---|---|
+| 0.95 (healthy) | 91.4% | 95.9% | 99.8% |
+| 0.90 | 73.6% | 80.4% | 97.2% |
+| 0.80 (flaky) | 37.6% | 40.8% | 75.3% |
+
+| Sweep, latest gate census | Value |
+|---|---|
+| Gate verdicts in the census | 106 |
+| Predicted all-green probability from history | 30.7% |
+| Cases flagged (top 5 by cost to that probability) | 87% to 91% per-trial pass rate each |
+| Estimated cost to measure all 5 at 10 trials | about $76, under the $150 weekly cap |
+
+A healthy 95% case used to be sent to a pointless fix round 8.6% of the time; with one extension that drops to 4.1%, while a flaky 80% case still fails the bar about 60% of the time.
+
+### What this means for you
+
+When /ship's measure loop prints needs-classify, read the listed reds and record each one with `ship-measure classify`; it decides for you. A hand-picked "provider" label is refused unless the trial's own failure cause shows a provider or transport error. The weekly sweep report (artifact `ship-measure-sweep-report`, also the job summary) lists each flagged case with its decision, cost and captures, ready for an agent to fix.
+
+### Itemized changes
+
+#### Added
+- `ship-measure classify`, `decide` and `extend`, and exit codes 5 (needs-classify) and 6 (EXTEND). EXTEND refuses to pool when any input changed (working tree, runner, Claude CLI, model, CI image, Bun, eval policy or harness version) and names the field; there is never a third batch.
+- Void batches: more than 30% of trials failing on provider evidence voids a batch, which is redispatched once; both batches are reported.
+- `ship-measure sweep` and `.github/workflows/eval-sweep.yml` (Mondays 12:00 UTC and on dispatch with `k`, `cap_usd` and `dry_run`). Config keys `ship_measure_sweep_cases` (5) and `ship_measure_sweep_budget_usd` (150, per 7 days, shared with every sweep that week). The workflow only reads; it never pushes or opens a pull request.
+
+#### Changed
+- Behavior cases are decided on the trial count over 12 (11 meets, 10 qualified, 9 extends; 22 and 20 of 24 pooled) instead of also requiring every panel to pass on its own; a contract violation still sends the case to a fix round at any count.
+- The `ship-measure report` table shows each round's decision and batches, and lists qualified results under their own heading.
+
+#### Fixed
+- `ship-measure measure` no longer refuses a case that shares its test file with other cases (for example `ship-exploratory-late-input`): the no-cost selection check before the first paid trial now accepts the per-case trial shard such a case lists.
+- `ship-measure measure` runs cases that keep native evidence (functional QA, docs faults) outside CI: each trial gets its own `EVALS_RUN_ID`, where before every trial stopped at "requires EVALS_RUN_ID" without starting a session.
+- The `plan-mode-no-op` gate case no longer times out on large pull requests: its CEO review reads a fixed small plan instead of the branch diff.
+
+#### For contributors
+- The bar is one pure module, `scripts/lib/measure-bar.ts`, pinned by `test/ship-measure-bar.test.ts`; the sweep is `scripts/ship-measure-sweep.ts`, pinned by `test/ship-measure-sweep.test.ts` and `test/eval-sweep-workflow.test.ts`. `eval:pass-rates` history loading is now `loadPassRateHistory()` in `scripts/eval-flake-rank.ts`, shared with the sweep.
+- Diagnostic trials still never become verdicts and never enter pass-rate history or EVAL_POLICY pooling. See `docs/TESTING_INTERNALS.md#ship-measure` and `#ship-measure-sweep`.
+
+## [1.91.32.0] - 2026-10-06
+
+**Codex second opinions work on macOS again, and text from a PR or reviewer can no longer run as a shell command.**
+**Every failure in this wave names its real cause and the fix.**
+
+Since v1.91.16.0, every Codex outside pass sourced from zsh (the macOS default, including Claude Code's Bash tool) reported `CODEX_MODEL: invalid`, so /ship, /review, /codex and the plan reviews ran without their outside voice. Greptile replies, the pre-existing-failure issue template and /spec's issue title put reviewer, diff and error text inside double quotes, where bash runs backticks. This release fixes both, and turns several "inconclusive" or "retry" messages into the actual cause. Contributor PRs were used as diagnosis and rewritten; each contributor is credited on the commit.
+
+### The numbers that matter
+
+| Check | v1.91.31.0 | v1.91.32.0 |
+|---|---|---|
+| `zsh -c 'source bin/gstack-codex-probe && _gstack_codex_select_model exec'` | `Module not found "/../scripts/..."`, `CODEX_MODEL: invalid` | `CODEX_MODEL: <model> (exec; source: ...)` |
+| Greptile reply that quotes a commit SHA in backticks | posts "Fixed in ." and runs the SHA as a command | posts the text byte for byte |
+| Codex usage-limit error at preflight | `MODEL_PROBE_INCONCLUSIVE ... proceeding`, re-probed in every skill | `CODEX_MODE: quota_exhausted` with Codex's reset line, cached 15 min |
+| /autoplan in a 52 MiB session journal | `code identity`, "Retry this phase-entry tool" (forever) | `code too_large` with the size and a recovery that keeps the work |
+| Weekly OSV scan | 10 findings (3 High) | no unignored findings |
+
+### What changes for you
+
+- **Codex works from zsh.** Sourced helpers (`gstack-codex-probe`, `gstack-egress-lib.sh`) locate themselves under bash and zsh; another shell, or a helper that cannot find itself, prints `CODEX_MODE: helper_unavailable` with a fix link instead of pretending you are logged out. Check it: `zsh -c 'source ~/.claude/skills/gstack/bin/gstack-codex-probe && _gstack_codex_select_model exec'` prints `CODEX_MODEL: <model> (...)`.
+- **Codex limits are named.** A usage limit (`insufficient_quota`, "You've hit your usage limit") is `CODEX_MODE: quota_exhausted`: Codex's own line with the reset time, no more Codex calls that run, and `GSTACK_CODEX_PROBE_RETRY=1` to re-probe early. A plain rate limit (HTTP 429) is `unverified (rate_limited)` and the review still runs.
+- **Free text travels as a file.** Reply bodies, issue titles and bodies, Codex prompts, design briefs and PR-body drafts are written by the agent to a private file under the project's `.gstack/tmp/` (excluded from git) and sent with `--body-file`/`-F body=@`. If the file was never written, nothing is sent and the skill prints the exact command to send it by hand. A lint fails on any free-text placeholder in a generated command.
+- **/autoplan in long sessions.** Over the 32 MiB journal limit, the guard says so, with the size, and gives the recovery: `/context-save`, a new session, `/context-restore`, then `/autoplan`.
+- **A red paid eval gets measured, not rerun blindly.** /ship runs the case alone (rule: 10 trials, needs 9), fixes the cause, re-measures, and runs the full gate once. It asks before spending more than $2 a trial and stops at $25 per case or 3 repair rounds (`ship_measure_*` config keys). Diagnostic trials never change a recorded verdict.
+- **Setup and auto-update refuse a hook that does not parse.** Setup registers the hooks that parse and names the broken one with its file and line; team-mode auto-update holds an incoming release whose hook would not parse, so your current hooks keep running.
+- **Router wording.** The root router routes only to skills in your session's skill list (skills you turned off in Claude Code are not routed to) and says when to answer directly; "When in doubt, invoke the skill" is gone. To update a CLAUDE.md that gstack wrote for you: `sed -i.bak "s/When in doubt, invoke the skill\./Route only to skills in the session's available-skills list; answer directly for quick questions or small scoped edits./" CLAUDE.md`.
+- **Spawned sessions never auto-grant consent.** Granting a consent or publishing data off the machine counts as irreversible in every spawned-session directive.
+- **Smaller fixes.** /autoplan names a shell-built snapshot init as the cause of its denial; Windows `browse chain` reads piped input (empty input is a usage error); Windows runtime roots run the checkout's browse server bundle (with a version-skew guard); redaction treats TypeScript types and JSX expressions as code only in TS/JSX files; /ship skips Greptile triage when there is no PR yet, saying why; /sync-gbrain no longer offers a call-graph build for a source with no code pages; Copilot on Windows runs bash blocks in Git for Windows Bash; /cso on Windows finds a trusted `docker.exe` and says native Windows Docker is not supported yet (static assessment only); a Java repo is no longer asked for `requirements.txt`; `GSTACK_DISABLE_GPU=off` enables WebGL; the config-mismatch refusal says another session started the daemon.
+
+### For contributors
+
+- The Codex watchdog (stock macOS, no `timeout`) freezes the command before reaping its children, so output can no longer leak after the deadline.
+- Tests that call a real `codex` run it with a private HOME and CODEX_HOME; the CSO missing-scanner test points Docker at a dead socket.
+- `scripts/ship-measure.ts` owns diagnostic measurement; see `docs/TESTING_INTERNALS.md#ship-measure`.
+- Not verified on Windows hardware: the Windows items are exercised by the Windows CI lanes and the new isolated-install journey in `windows-setup-e2e.yml`.
+
+## [1.91.31.0] - 2026-10-06
+
+**Rails runtime qualification no longer fails at random when exporting the prepared app.**
+
+Main run 37504391826 passed 9 of its 10 native qualification rows. The Rails amd64 row failed with `PREPARED_EXPORT_REJECTED (exit 70: unrecognized helper failure)`. That failure had appeared once locally before.
+
+- **Bundler installs on one thread.** Ruby's `File.umask` getter briefly sets the process umask to 0 and then restores it, and RubyGems calls it for every file it extracts. The Rails offline step ran `bundle install --jobs 2`, so a directory created by the second install thread at that moment came out 0777. The export then refused the tree, correctly, with "prepared tree contains a publicly writable directory". The install now runs with `--jobs 1`, and the export gate is unchanged.
+  - Extracting the fixture's 69 gems on two threads in the staged image left 0777 directories in 20 of 20 rounds; extracting them on one thread left none in 20 rounds.
+  - Real `bundle install --jobs 2` runs of the fixture left them in 3 of 16 standalone installs and 1 of 18 full preparation runs.
+  - At the app container's 0.85 CPU share, one thread installs in the same time as two.
+- **The rejection reason is readable.** The helper's top-level handler prints the bare error message and exits 70, but the parser only accepted Bun's `error: ` prefix. It now accepts both forms and also reads errno-style messages, while still dropping any path.
+
+## [1.91.30.0] - 2026-10-05
+
+**A failed eval now says what happened, with the evidence and the next command.**
+**Bun is checked before anything installs, and make-pdf and /review work in Codex.**
+
+This release follows up on the severe fix wave. Its eight census runs had 21 red verdicts, and 27 of the 28 failed trials were labelled `assertion`, including timeouts and provider refusals, so the reports misdescribed their own failures. Now every failed trial records a machine-checked cause beside the unchanged pass/fail class, and each red line in the census report carries the expected and received values (or the judge's failing scores), the artifact holding the transcript, and a command that reruns only that case. For everyone using gstack: setup refuses a Bun too old to keep a project's `.env` away from gstack's tools, auto-update checks that before moving your checkout, and make-pdf and /review work inside Codex.
+
+### The numbers that matter
+
+Each row is a regression test on this release that fails on v1.91.19.0, or a measurement from the 2026-10-03/04 census artifacts named in the row.
+
+| Check | v1.91.19.0 | v1.91.30.0 |
+|---|---|---|
+| make-pdf blocks on Codex that use `$P` without finding it | 7 of 8 | 0 |
+| /review with a read-only `.git` (Codex's sandbox) | prints nothing, "Nothing to review" | reviews against the local base, says `stale at <rev>` |
+| `./setup` with Bun 1.3.2 | installs; compiled tools read the project's `.env` | refused before writing anything |
+| Census cost line when billing was not captured | `$0.00` | known sum plus "N of M trial(s) cost unknown" |
+| plan-mode-no-op recorded wall (census 37151477069) | 346 s (its test times summed) | 176 s (the shard's wall) |
+| Gate census slowest slice, replanned with measured walls (census 37198445662) | ~677 s | <=539 s planned |
+
+The first three rows are the ones users feel. The last three are why the next census reports are believable: costs, times and causes now mean what they say.
+
+### What changes for you
+
+- **Failure reports explain themselves.** A red census line keeps its error and adds `cause <cause>: <evidence>` (refusal, API error, provider stall, session or observer timeout, assertion), Expected/Received or `dimension mean < threshold (n samples) "rationale"`, `evidence: <artifact>` and `after a repair: <command>`. Model-written text is sanitized before it reaches an issue or PR comment.
+- **Bun floor and safe auto-update.** Setup refuses Bun older than 1.3.3 and warns below 1.4.0, the tested version. Team-mode auto-update and `/gstack-upgrade` read the incoming release's Bun requirement first and hold the update, leaving your install untouched, when your Bun is too old. The first update run by an older auto-updater cannot do this check.
+- **make-pdf on Codex** and the other env-var hosts finds its binary in every block, and `MAKE_PDF_BIN` works there too. Install paths with spaces work.
+- **/review in Codex's sandbox.** The working-tree fingerprint writes its git objects to a private temp directory, and a base that cannot be fetched is reported as stale instead of ending the review.
+- **/freeze, /guard, /unfreeze and /investigate's edit boundary work on Codex** and the other env-var hosts. Their scripts used a path a global install does not have, and setup never installed `freeze/bin`; both are fixed, and /benchmark-models, /retro and /diagram find their helpers the same way.
+- **`browse stop` reaps a surviving headless Chromium** again on Playwright 1.62, only for browsers gstack launched.
+- **/ship's documentation gate** records post-audit file hashes with its helper instead of having the model retype them.
+- **/plan-ceo-review** shows its mode line (`Mode: ...` or `Auto-decided review mode → ...`) word for word right after the mode is chosen.
+- **/qa** names where its report filename parts come from and labels timing as probe budget and guarded command time. **/deslop-shared-libs** names a concrete risk for every recommendation.
+- **/office-hours spec review stops when nothing blocking is left.** Each finding is blocking or minor; minor findings are recorded in Reviewer Concerns and never force another round, and the parent fixes only blocking ones between rounds. Rounds 2 and 3 re-review the exact design diff the helper captured since the last round. The reviewer returns a one-line sha256 receipt for its saved verdict instead of echoing it. Callers can lower the 3-round cap with `--max-rounds`.
+- **`GSTACK_DESIGN_IMAGE_MODEL`** switches the design tool's image model (default `gpt-image-2`); a value that is not a gpt-image model name is refused before any request.
+
+### Behavior changes you may notice
+
+- **LLM judges pass a dimension when 2 of their 3 samples meet its threshold** (EVAL_POLICY v3, the per-dimension median; it was the mean, so one low sample beside two passing ones failed the panel). Thresholds, sample count, judge model and prompts are unchanged; panel logs still show every sample and the mean. Policy v3 and HARNESS_VERSION 2 start a new pass-rate series for every case.
+- **Office-hours review verdicts are schema version 2** (`severity` and `changed_text` on every finding). An in-progress review saved by an older version is refused; start a fresh review directory.
+- **Bun below 1.3.3 stops setup** with `gstack needs Bun 1.3.3 or newer`; nothing is installed. Fix: `bun upgrade`, then `./setup`.
+- **Auto-update can say `update held (bun-too-old: ...)`** and `/gstack-upgrade` can stop with `BUN_TOO_OLD`; your current version keeps working. Fix: `bun upgrade`.
+- **/review in a read-only checkout reports `Base coverage: stale at <revision>`** instead of stopping with "Nothing to review".
+- **Browser Quick QA has a 3-minute budget** (was 30 seconds, too short for a homepage and five pages with their checkpoints).
+- **/review's plan-completion question is not asked in spawned or non-interactive runs;** they report REQUIREMENTS MISSING and continue without recording anything.
+- **`live-model-check.ts` ignores `GSTACK_DESIGN_MODEL`** and always checks the default models.
+- **A census dispatched on a branch no longer comments on or closes main's tracking issue** (periodic and marathon). Its report goes to the run's step summary and a `census-report` (or `marathon-report`) artifact; main posts as before.
+- For contributors: `bun run eval:pass-rates` rejects unknown flags and case ids (exit 2) and `--gate` also fails when a session ran above 85% of its armed budget; every `claude -p` eval session streams partial messages (only a liveness summary is kept) and writes `session-ledger.jsonl`; overlay comparisons count an overlay-off wrong answer as a measured result (contract v4); the AUQ matrix scores recommendation substance with a 3-sample judge panel.
+
+### Itemized changes
+
+#### Added
+- `bun run eval:pass-rates --headroom` (slowest armed session per case against its budget), `--reds` (verdict reds by class and cause, with the all-green probability and its interval) and `--run <id>` (one census's reds, downloading only the slices they name); `--help` works offline.
+- The weekly tracking issue shows every pass-rate alarm line (it showed only the header), the red ledger by class and cause, session headroom, the all-green probability, and a link to the new guide `docs/evals/census-red.md` (from a red census line to a diagnosis with free commands). The marathon issue closes itself on the next green main run.
+- Periodic cases `codex-multiblock-live` (installs gstack for Codex into a fresh `CODEX_HOME` and runs a later /learn block that must find gstack on its own) and `design-model-smoke` (the design tool's default OpenAI models; reported as skipped without `OPENAI_API_KEY`, never as a pass).
+- `docs/troubleshooting.md` sections for the Bun floor, held updates, stale /review bases, fingerprint temp-dir errors, the image model override, an unrecorded Chromium PID, and census report lines.
+
+#### Fixed
+- `bun run scripts/test-paid-shards.ts --case <id>` selects cases registered in a loop and whole-file cases such as plan-mode-no-op; it used to select nothing.
+- The plan-review floor test approves its own plan-file edit when the diff preview soft-wraps unchanged lines.
+- The /plan-ceo-review approach-menu eval no longer asks for "verbatim ... exact prose" output, which tripped the provider's output-extraction refusal.
+- `gstack-docs-candidate --help` prints its usage and exits 0; its usage error pointed at a `--help` that failed. The docs gate fixtures declare it, and an "atomic replacement unproven" line now names the check and the tool failure that denied it.
+- The prosons neutral-posture check no longer reads "a coverage call, not a taste call" as the neutral dodge.
+
+#### For contributors
+- Session ledger (`test/helpers/session-ledger.ts`), a pure failure-cause classifier beside `failureClassOf`, and one sanitizer for published text (`scripts/lib/published-text.ts`). Verdicts, `failure_class` and `error` are unchanged under EVAL_POLICY v1 (main and branch report code agree on all 15 stored census lanes).
+- Replay corpora for five repeat-offender detectors in the free suite, and an audit of phrase-only detectors (`docs/evals/detector-inventory.md`). The CEO auto-decide detector credits the mode handoff only when the chat shows its line.
+- Judge calibration controls (`docs/evals/judge-controls-2026-10.md`). The workflow judges passed bundles with a required step removed, so `test/workflow-required-steps.test.ts` now checks every step and phase heading of the judged workflow skills.
+- Paid shard durations refreshed from census 37198445662; a JUnit case's recorded wall is capped by its shard's wall.
+- The docsync fixture saves its observation interface to a file its children read instead of having the parent copy it into each child prompt.
+
+## [1.91.29.0] - 2026-10-05
+
+**Native runtime qualification can pass for Node, Bun, Python and Rails.**
+
+Main run 37345275258 of `cso-runtime-images.yml` staged every image, but eight `qualify-native` rows failed. Two causes showed up in the logs, and more were hiding behind them. Every cause below is fixed, and each was reproduced on a local amd64 Docker daemon against freshly built images.
+
+- **Promotion evidence is recomputed for injected runtimes.** The cold-start test put the staged runtimes into its test catalog without re-binding `promotion.evidenceDigest`, so Bun, Python and Rails failed with `RUNTIME_PROMOTION_EVIDENCE_MISMATCH`. A shared `installStagedRuntime` helper re-binds the digest, and the test now validates the catalog it builds.
+- **npm dependency acquisition works.** npm 11 refuses to load the same file as both its user and global config. The preparation commands passed `/opt/cso/empty-config` for both, so every Node acquisition failed. The global config now points at its own empty file, `/opt/cso/empty-globalconfig`, which the Node image creates.
+- **Prepared output can leave its container.** `docker cp` cannot read tmpfs mounts. The acquisition `/archives` and offline `/work` directories are now Docker local volumes backed by tmpfs, with the same size, owner, mode and `nosuid`/`nodev` options as before (`/archives` stays `noexec`). The runner refuses to start a container when Docker did not keep those options.
+- **The offline seed stays up.** The in-image `seed` command exited while the offline commands were still to run, because it was waiting on a promise that nothing kept alive. It now holds a timer until the container stops.
+- **Prepared trees can execute.** Docker's tmpfs default is `noexec`, so virtualenv Python and binstubs under `/work` exited with status 126. `/work` now mounts `exec` explicitly.
+- **The registry broker releases its connections.** Under Bun, `pipe()` never closed the upstream socket. A Rails acquisition opens about 70 tunnels, which filled the broker's 64-connection limit and timed out. The broker and the in-container forwarder now forward end and close explicitly, and a free test opens 70 tunnels.
+- **Gem acquisition is batched.** Each `gem fetch` process spends about 11 seconds loading the RubyGems index, so acquisition now runs one `gem fetch` per platform for all exact gems.
+- **Rails commands wait for the source copy.** `db:prepare` ran while `run-app` was still copying the prepared tree, and failed with "Could not locate Gemfile". Rails application and test containers now start through `startHeldApplication`, which waits until the copy has finished.
+- **Test fixtures.** The Python cold fixture called a method that `unittest.TestCase` does not have, and the Rails cold fixture had no `bin/rails`, so `rails server` printed the `rails new` help instead of booting.
+- **Dependency installs get a bounded longer ceiling.** The Rails fixture's lockfile lists only the `ruby` platform, so `bundle install --local` compiles nokogiri, sqlite3 and pg. At the app container's 0.85 CPU share that takes about 385 seconds, past the 300-second limit on one command. Dependency fetch and install commands in the preparation phases now get `PREPARATION_COMMAND_TIMEOUT_MS` (900 seconds). Every other command keeps 300 seconds, both stay inside the journey deadline, and a free test pins which calls can ask for the longer ceiling. The CPU share and `ISOLATION_POLICY_HASH` are unchanged.
+- **Export refusals name their reason.** A prepared-tree export the helper refuses now fails with `PREPARED_EXPORT_REJECTED`, the helper's exit status and its fixed reason or filesystem errno. Target paths are never included, and nothing retries. One unexplained refusal was seen locally in 20 exports, so a recurrence on CI will now say why.
+
+- **The `/cso --diff` eval accepts every correct name for the webhook bug.** `cso-diff-mode` matched only `signature|authenticat|forg` in the root cause and impact, so a correct finding titled "no authenticity verification" failed it. It now also matches `authentic`, `spoof` and `hmac`, and checks the finding title. A solo panel on main measured the case at 10/10 with and without the qualified scanner images available.
+
+The images change (`/opt/cso/preparation` and the Node recipe), so qualification needs a fresh staging run on main.
+
+## [1.91.27.0] - 2026-10-05
+
+**The first protected-main runtime staging run can finish, and a qualified scanner catalog can ship.**
+
+The first `cso-runtime-images.yml` dispatch on main staged all ten runtime images but four rows stopped before qualification. Both causes are fixed:
+
+- **Rails SBOMs fit the attestation limit.** BuildKit's Rails SBOM lists about 19,600 files (20 MB), past `actions/attest`'s 16 MiB cap. The runtime and scanner release workflows now sign a package-level SPDX 2.3 document (`scripts/cso-sbom-packages.jq`: packages and package relationships kept, file entries and file relationships dropped, about 0.8 MB for Rails) and reject any document whose relationships name unknown elements.
+- **A qualified scanner catalog no longer breaks every scan.** Persisted scanner outcomes record the catalog revision (`cso-scanners-<sha>-<runId>`) and each profile's workflow run URL. The 11-digit Actions run id read as a phone number to the redactor, so every `gstack-cso scan` against a real catalog failed with `REDACTION_FAILED`. Catalog revisions and exact Actions run URLs are now schema-bound helper metadata; the same digits anywhere else are still redacted. Three tests that assumed the shipped catalog is empty now hold for either state, so the scanner promotion job's own validation passes.
+- **The staged-image test probes tools in a real role container.** It ran `npm --version` and the other version probes inside the group's network anchor, which is limited to 8 processes; Node's worker threads exceed that and abort (exit 134). The probes now run in the verifier container that the same test already starts. Production code never executes in the anchor.
+
+## [1.91.25.0] - 2026-10-05
+
+**gstack can grade a private, two-architecture `/cso` release run, and the runtime release gates check more for themselves.**
+
+These are the gstack-side pieces the private CSO runtime evaluator needs before it can qualify Node, Bun, Python and Rails runtimes. The release pipeline (`cso-runtime-images.yml` → private evaluator → `cso-runtime-qualification.yml` → `cso-runtime-promote.yml`) now verifies more of its own evidence, and nothing about a user's audit changes until a qualified runtime catalog merges.
+
+### What changes for you
+
+- **Private corpora score through the public scorer.** `scripts/cso-eval.ts` accepts an injected corpus with the public layout (`defineEvalCorpus`), per-cell `linux/amd64`/`linux/arm64` platforms with one producer installation and provider identity per platform, a `release` profile (v3, one repetition) and a hash-bound external v2 baseline. The `full` profile matrix is byte-identical to before.
+- **Evaluation-only helper builds.** `bun run build:cso -- --evaluation-candidate <catalog> --output <dir>` builds a helper unit from a `cso-eval-` candidate catalog outside the checkout. It reports `evaluationOnly: true`; setup, promotion and normal builds refuse it.
+- **The ingress checks the staging run itself.** `cso-runtime-qualification.yml` resolves the staging run from verified provenance and requires a successful protected-main `workflow_dispatch` run whose ten `qualify-native` jobs all passed. A dispatch summary job shows the approver the claimed images and an optional `evaluationRef` before approval.
+- **Native gate evidence comes from test results.** Booleans are derived from JUnit executed-and-passed counts (`scripts/cso-native-evidence.ts`); skipped Docker tests no longer read as passing, and PostgreSQL rows list only the checks they need.
+- **Catalog promotion PRs get their required checks.** Both promote jobs dispatch `free-tests.yml` on the new branch.
+- **Multi-payload security proofs.** A verification request's `security` may hold 1–8 assertions judged in one before/after pair; a single assertion hashes exactly as before.
+- **Producer cells are opaque.** A producer's input and receipt name only an opaque cell id; the evaluator maps it back to the case and variant, so an agent with root on its cell cannot learn which answer it is graded against.
+- **Requalification triggers.** Qualified catalogs record the helper ABI, isolation policy hash, image preparation digest and build-inputs revision; a free test fails when the committed catalog no longer matches the code.
+
+## [1.91.24.0] - 2026-10-05
+
+**PR evals stop throwing away work, and a red weekly census means something again.**
+**The free suite is faster, its flakes are visible, and broken commands are gone.**
+
+This release is a test, eval and CI audit wave. It touches no skill behavior. The paid PR lane keeps a cancelled run's finished results for the next push, waits briefly when pushes come in quick succession, and runs only the gate cases a change can affect once the change avoids a shared input. Every paid lane has a ceiling sized per runner, so a stuck shard ends as an honest `TIMEOUT` or `not_run` instead of holding a runner for four hours. The weekly census can no longer be cancelled by a branch dispatch, and a new weekly test-health report says which free tests are getting flaky or slow.
+
+### The numbers that matter
+
+| Check | v1.91.22.0 | v1.91.24.0 |
+|---|---|---|
+| Paid CI job ceiling (gate census / periodic) | 254 / 173 min for every slice | 34-82 min per slice; 50 min for ordinary periodic slices |
+| Local `eval:bg:pr` / `eval:bg:release` detach cap | 25.8 h / 32.4 h | 2.9 h / 2.25 h (1.5× planned work, never over 4 h) |
+| Passing results a cancelled PR run hands to the next push | 0 | every finished shard, failures included |
+| A branch dispatch that cancels main's weekly census | possible | no (concurrency is per ref and event) |
+| Windows free lane wall | 8.1 min on one runner | about 4.6 min on six runners |
+| Windows-safe files the curated lane runs | 573 | 638 |
+| zsh arms of the bash+zsh portability tests in CI | ~42 skipped (no zsh) | all run |
+| Free-suite flaky passes reported anywhere | none (a write-only artifact) | job summary + weekly `test:health` |
+| Sentence pins on skill prose in free tests | 2,332 | 1,190 |
+
+### What changes for you
+
+- **PR evals keep finished work.** A `recover-receipts` job restores the passes and failures of up to five cancelled runs of the same PR, checks where each came from, and hands them to the planner, so a re-push re-runs only what changed. A 90-second debounce skips a run that a newer push has already superseded; the `evals-no-debounce` label turns it off and `evals-fresh` turns reuse off.
+- **PR selection narrows where it can.** Duration seeds, free-only workflows, free tests and free fixtures (listed in `test/helpers/free-fixtures-data.ts`) no longer force the full gate. Other files map to the paid cases that actually consume them, derived from imports, bin names, template placeholders and build outputs (`scripts/pr-dependencies.ts`); deleted files are placed the same way. Shared inputs (package.json, the CI image, setup, the preamble resolvers, the eval policy) still run the full gate. The job summary names every fallback file and its fix.
+- **`bun run eval:bg:pr` and friends dispatch CI when your HEAD is clean and pushed**, and otherwise run locally with a cap sized to the planned work. Both paths end with `### gstack-detach EXIT=<code> ###`; `bun run scripts/eval-bg.ts status <log-or-run-id>` reads it.
+- **Weekly test health.** `bun run test:health` (and `.github/workflows/test-health.yml`, Mondays) reports PR-lane fallback rate, reuse, cancelled slice-minutes, flaky free tests over 5% of main runs, and unseeded free tests. Its tracking issue opens only from main.
+- **Branch census dispatches run the periodic lane only.** Add `-f include_gate_census=true` for the gate census too, or dispatch `evals.yml` with `-f evals_all=true` for gate cases alone.
+- **The OSV scan opens a tracking issue when it fails on main**, and a free test fails 14 days before any `ignoreUntil` suppression expires.
+
+### Behavior changes you may notice
+
+- **EVAL_POLICY is v2.** A case's pass-rate history resets only when its own files or the declared `HARNESS_VERSION` change, weeks for quarantine expiry count main runs only, and branch census trials count toward a case's history only when its files match a series main has run. Readers ignore records from a newer policy version and say how many they skipped. Shared-harness edits record a decision with `bun run scripts/bump-harness-version.ts --bump|--non-behavioral "<why>"`.
+- **The 15 `carve-section-loading-<skill>` test files are one case-sharded file** with a case id per skill (`--case carve-section-loading-review`); `GSTACK_CARVE_SKILL` is gone. `skill-e2e-qa-workflow` runs case by case.
+- **Paid slices pack 7 minutes of work (was 9)**, so more runners start at once.
+- **`eval:select` defaults to the PR profile.**
+- **`/cso` docs say contained runtime and scanner runs are not available yet**: no runtime profile is qualified and the scanner catalog is empty.
+
+### For contributors
+
+- These package scripts print their replacement and exit 1 for one release, then go away:
+
+| Retired | Use instead |
+|---|---|
+| `test:evals`, `test:e2e`, `eval:bg` | `bun run eval:bg:pr` |
+| `test:evals:all`, `test:e2e:all`, `eval:bg:all` | `bun run eval:bg:release` |
+| `test:gate` / `test:periodic` | `bun run test:gate:sharded` / `test:periodic:sharded` |
+| `test:codex`, `test:codex:all` | `bun run test:periodic:sharded` (they ran zero cases) |
+| `eval:flake-rank` | `bun run eval:pass-rates` |
+| `eval:watch` | tail the `gstack-detach` log, or `gh run watch <run-id>` |
+| `test:audit` | `bun run test` |
+
+- `docs/test-value-bar.md` narrows a "prompt-byte contract" to machine-read tokens. Check template and SKILL.md structure with `test/helpers/prompt-structure.ts` instead of pinning English sentences.
+- Free-suite tests share one install fixture (copy-on-write clones of a read-only seed) and inject short deadlines instead of waiting real seconds. Subprocess pipe tests use FIFOs; see TESTING_INTERNALS "Flake ledger" for the rules.
+- The free duration seed is shrink-only above 60 seconds per file (`scripts/free-test-seed-allowlist.json`), and only `bun run test:ubicloud --record-durations` produces an acceptable seed. Windows has its own seed, refreshed by a `record_durations` dispatch.
+- Deleted: `ci-image.yml` (the eval workflows build the same image), `scripts/update-readme-throughput.ts`, `scripts/eval-watch.ts`, orphaned fixtures, and ~160 unused imports in the paid runner (now split into `scripts/lib/paid-types.ts` and `paid-select.ts`). Native Windows and Dia qualification moved to the dispatch-only `native-qualification.yml`; ML, gitleaks and Swift opt-in tests run in the quarterly `platform-qualification.yml`. Small CI jobs run on free GitHub-hosted runners.
+- Evidence, the EVAL_POLICY v2 memo and its backtest are in [docs/test-audit-2026-10.md](docs/test-audit-2026-10.md).
+
+## [1.91.22.0] - 2026-10-05
+
+**`/cso` scanner execution has reviewed, signed scanner images to build from.**
+
+`lib/cso/scanner-images/build-inputs.json` now pins one attested base image per scanner (gitleaks, OSV-Scanner, Semgrep, zizmor, Trivy, Schemathesis) for linux/amd64 and linux/arm64, plus the SBOM generator. None of the upstream images publish GitHub artifact attestations, so the bases come from [`garrytan/gstack-cso-scanner-bases`](https://github.com/garrytan/gstack-cso-scanner-bases) release `bases-2026.10.04.3`: each re-publishes a pinned upstream digest with the offline Semgrep rules or OSV/Trivy databases added, and its workflow signs SLSA provenance and an SPDX SBOM. Every identity, statement-set digest and asset hash was re-verified independently before the state changed to `reviewed`. Dispatching `cso-scanner-images.yml` on main now builds, qualifies and proposes the scanner catalog; until that catalog merges, scans still report `not assessed`.
+
+### The numbers that matter
+
+| Check | Result |
+|---|---|
+| Attested images (6 scanners x 2 platforms + generator) verified with gstack's own `gh attestation verify` flags | 13/13, both predicates |
+| Statement-set digests recomputed with `scripts/cso-attestation-evidence.ts` | 26/26 equal |
+| Offline asset hashes recomputed from both platforms with `hash-asset` | 6/6 equal |
+| Scanners completing a real network-none scan through the production adapter on the published amd64 bases | 6/6, no coverage gaps |
+
+### What changes for you
+
+- **OSV and Trivy reports survive redaction.** Advisory links such as `ntap-20210312-0006` read as phone numbers and four-part versions read as IP addresses, which used to discard the whole report. Scanner output now has each located span replaced in place; output is still withheld when a span cannot be located or crosses stdout and stderr.
+- **Schemathesis scans finish.** Schemathesis 4.26+ fuzzes until `--max-time` is spent; the adapter now budgets 75% of the scanner deadline and accepts a `max_time` stop once every selected operation ran.
+- **The scanner qualification test runs.** Its fixture now lives where the executor mounts sources and declares a real dependency, so OSV and Trivy exercise their offline databases.
+
+### For contributors
+
+- Refresh advisory databases by pushing a new `bases-*` tag in `gstack-cso-scanner-bases`, then review the release's `build-inputs.json` candidate here.
+
+## [1.91.19.0] - 2026-10-03
+
+**A check that did not run now says so, and memory stops losing transcripts.**
+**Codex and the other non-Claude hosts find gstack in every step of every skill.**
+
+This release closes the severe bugs left in the tracker. Two promises lead. First, nothing is silently lost: memory ingest marks a transcript saved only after gbrain confirms it landed, and learnings that could not be written say so. Second, no false all-clear: a Codex review whose sandbox could not start, a retired Codex model, a design binary killed at launch, and a learnings search with no Bun all used to read as "ready", "pass" or "no results". Each now prints `not run` or `unavailable` with the reason and the fix command, and every one of those messages has a section in the new [docs/troubleshooting.md](docs/troubleshooting.md).
+
+### The numbers that matter
+
+Measured on this release's tests against v1.91.16.0's code (each regression test was run on both; the counts come from those runs and from `bun run gen:skill-docs --host all`).
+
+| Check | v1.91.16.0 | v1.91.19.0 |
+|---|---|---|
+| Codex review in a container with no user namespaces | gate `pass` on "no findings" | `unavailable`, missing coverage |
+| Structured outside review with a `[P0]` finding | gate `pass` | gate `fail` |
+| Generated bash blocks on env-var hosts that use a gstack path without finding gstack (`test/env-host-fence-conformance.test.ts`) | hundreds | 0 |
+| Codex `/ship` SKILL.md | 202-241 KB, ~57K tokens | carved, ~20K tokens |
+| Redaction warnings on one rendered `/diagram` (SVG + .excalidraw) | 115 | 0 |
+| A transcript gbrain skipped during import | stamped as saved | retried until gbrain has it |
+
+The first two rows are the ones to care about: a review that read nothing, or found a P0, used to let /ship through.
+
+### What changes for you
+
+- **Gates tell the truth.** Outside reviews go through one classifier that reads the text, stderr and exit status. Codex reviews that could not run print `Codex outside review unavailable: <reason>` with the fix, and /ship and /review show them as missing coverage, never as passed.
+- **Memory keeps what you gave it.** Memory ingest checks that each page landed before marking it saved, retries pages gbrain skipped, and sets aside (and names) one page that keeps breaking a batch. After upgrading, a bounded catch-up per `/sync-gbrain` re-imports transcripts older versions lost (`gstack-memory-ingest --reconcile --dry-run` previews it). Transcripts import into a private gbrain source per repository.
+- **Codex, Factory, OpenCode, Cursor, Copilot and Kiro** see the gstack router (setup installs real copies, which Codex requires), get the design and make-pdf binaries, and every skill block finds gstack on its own, honoring `CODEX_HOME` and an exported `GSTACK_ROOT`. `./setup --status` says whether each install's router is a real file and its section links resolve.
+- **Pushes stop being blocked by false positives:** diagram coordinates, `session = requests.Session()`, `CLAUDE.local.md`, four-part version numbers and `postgres:postgres@localhost`. Real secrets still block.
+- **Windows:** /freeze, /guard and /investigate stop denying every edit, the generators no longer crash with EEXIST, the node-server bundle builds, and the /cso helper builds with the current Windows SDK.
+- **/ship in a repo without a VERSION file** ships without a version change instead of stopping.
+
+### Behavior changes you may notice
+
+- **Codex reviews in containers say "unavailable" instead of passing.** Fix: enable unprivileged user namespaces, or in a container you trust `export GSTACK_CODEX_NO_SANDBOX=1`.
+- **The structured outside-review gate fails on P0 findings**, not only P1. An untagged structured review is `OUTSIDE_STATUS: unverified` (missing coverage).
+- **`CODEX_MODE: unverified`** replaces `ready` when the model check times out; the review still runs and its own result is checked.
+- **The first automatic Codex review on a machine prints a one-time notice** naming the provider and which login or key pays. Reviews stay on; `gstack-config set codex_reviews disabled` turns them off.
+- **/ship without a version source ships without a version change:** no bump, no CHANGELOG version header, no `vX.Y.Z` title prefix. To version releases, create `VERSION` or `echo package.json > .gstack/version-path`. A pinned version file that is missing or malformed stops /ship with its path.
+- **The plan completion audit says `not run`** instead of auditing your PR against the newest unrelated plan. Bind one with a `Plan: <path>` line in the PR body, or run /autoplan.
+- **Learnings and timeline lookups report a missing Bun** (exit 127 with the fix) and skills print `LEARNINGS: unavailable (<reason>)` instead of an empty list.
+- **Design skills say `DESIGN_NOT_AVAILABLE: <path> --version exited <code>`** when the design binary cannot start, instead of claiming it is ready. Fix: `cd <gstack checkout> && ./setup`.
+- **`/sync-gbrain --dream` (and `--full`) runs only the call-graph phase.** If your gbrain cannot, it skips and says so; run `gbrain dream --source <id>` yourself for the full ~35-minute cycle.
+- **`gstack-memory-ingest --no-write` is a true dry run** and no longer records pages as saved.
+- **Transcripts with no repository stay on this machine** when your brain is remote. Staged pages carry a `gstack_content_sha256` frontmatter field.
+- **Disabled skills leave the router** (`gstack-config set disabled_skills ...` updates it in the same command).
+- **`browse type --selector <sel> <text>`** types into an element. Bare `browse type` still types into the focused element and hints when the first word looks like a selector. Text starting with `--` goes after `--`.
+- **Headed browse keeps one profile per project** (`<project>/.gstack/chromium-profile`). First use copies your logins from `~/.gstack/chromium-profile` when no browser is using it. `browse profiles` lists them; `browse profiles prune --days 30` removes idle ones. If a live browser holds the profile, browse names it and stops instead of killing it.
+- **A redirect or link to a link-local or metadata address resets the tab to `about:blank`** and the command fails with the reason.
+- **`BROWSE_EXTENSION_ID` is ignored;** forks use `gstack-config set browse_extension_id <id>`. `BROWSE_EXTENSIONS_DIR` runs headless with no window.
+- **`$D` (design) no longer picks up `OPENAI_API_KEY` from a project's `.env`.** Export it in your shell or use `~/.gstack/openai.json`.
+- **A database URL with the default `postgres`/`postgres` login still blocks a push on any host but `localhost` or `127.0.0.1`,** including a compose service name like `@db`. Use `localhost`, or read the URL from an env var.
+- **Auto-update (team mode) no longer says "just upgraded" when setup failed.** It retries after 1h, 6h and 24h, and each session start prints one line naming what did not finish and the fix.
+- **Hand edits to installed router copies are saved to `~/.gstack/backups/skill-copies/`, then overwritten.** Setup prints where.
+- **In Conductor, setup no longer installs the AskUserQuestion preference hook** and removes one it added. To keep it: `gstack-config set plan_tune_hooks yes`, then `./setup`.
+- **Required team mode also blocks Copilot CLI's skill tool.** Re-run `gstack-team-init required` to upgrade the project hook.
+- **`gstack-qa-evidence capture` prints a `revalidate` list after your inputs change**, naming the probes to rerun on current inputs before `materialize`; `materialize` says its verdict is final for that report root, so rerun the listed probes first.
+- **/gstack-upgrade asks you to paste the absolute path Step 2 prints**; every later step checks it is inside gstack's checkout before running git.
+- **/ship's documentation gate snapshots its inputs in one call.** `gstack-docs-candidate snapshot` records the audit candidate (base, HEAD, index, changed and new paths, content hashes) and `compare` reports what changed after the child returns.
+- **Two setups writing settings.json at once both land.** A writer whose lock attempt raced a holder releasing it used to skip its hook change (exit 5); it now retries once and only reports `cannot create lock` when the lock directory truly cannot be created.
+- **/plan-ceo-review prints its mode handoff** by running `gstack-ceo-mode-handoff` right after the mode is chosen (by you or by a saved preference), so the selected mode and approved decisions always appear before the review continues.
+- **Browser setup names the platform when Aside is absent:** the probe prints `NEEDS_ASIDE: <OS>` (was `NEEDS_ASIDE`), and the macOS-only download pitch trusts that line instead of re-checking the OS. `GSTACK_PLATFORM` overrides it for tests and unusual hosts; set it in your shell, never a project `.env`.
+
+### Security
+
+- A repository's `.env` or `bunfig.toml` can no longer change gstack's browser. Compiled binaries and the browse daemons ignore them, so a project cannot turn off Chromium's sandbox (`GSTACK_CHROMIUM_NO_SANDBOX`) or run code through a bunfig `preload`. This needs Bun 1.3.3 or later; gstack now requires Bun 1.4.0 (`engines.bun`), the version CI runs.
+- The browse sidebar terminal accepts connections only from the gstack extension.
+- Browse refuses link-local and cloud-metadata addresses (169.254.0.0/16 including container credential endpoints, 100.100.100.200, fe80::/10, fc00::/7) in every numeric and IPv6-mapped spelling, including after redirects and page-driven navigation. Connection-time DNS rebinding is not covered.
+- Screenshot, PDF and scrape output paths are checked the way the OS resolves them, so a symlink cannot redirect a write outside the allowed folders.
+- `GSTACK_CODEX_NO_SANDBOX` is read only from your shell environment (exactly `1`), and every use prints a warning.
+- The iOS QA daemon bounds each device response (one 30-second deadline for the whole response, 64 MiB cap) and never replays a tap or write whose response was lost.
+
+### Upgrade
+
+- **Claude Code:** run `/gstack-upgrade`, then start a new session.
+- **Codex and the other env-var hosts (Factory, OpenCode, Cursor, Copilot, Kiro):** find your checkout with `./setup --status` (the `source` column), then run `cd <source> && git pull && ./setup --host <host>`, and start a new session.
+- Then `./setup --status` should show each install's router as a real file with every section link resolving.
+
+### Itemized changes
+
+#### Fixed
+- **Memory and gbrain.** Ingest stamped pages gbrain skipped or never stored (#2778); `--no-write` wrote state. A project's `.env` `DATABASE_URL` reached a local PGLite brain (#1931). Offline or off-VPN looked like a broken config, and dot-leading project names (`.claude`) blocked ingest forever (#2884). Transcripts from every repository shared one source (#2232). `/sync-gbrain` said "pushed" when the artifacts source had 0 indexed pages (#2670), forced the full dream cycle (#2783), always reported the call graph as unknown, and kept deleted worktrees' sources silently. The 1.27 artifacts-repo rename never worked, and installs it repointed at a repo that never existed are repaired (#1437). gbrain install and source wiring needed `jq` (#2369).
+- **Codex.** A retired model (HTTP 404) or a custom provider with a wrong `base_url` reported `ready` (#2843). Custom providers configured with `env_key` failed the auth check (#2192). Large prompts failed on argv limits (Windows 32 KB, Linux E2BIG) and the macOS fallback timeout dropped the prompt (#1674, #1686).
+- **Non-Claude hosts.** Later skill blocks lost `$GSTACK_*`, `$B` and `$D` and ran `/bin/gstack-...` (#1159). Codex skipped the symlinked router. design/dist and make-pdf/dist were missing from runtime roots (#2891). /ship and /plan-ceo-review overflowed the 160 KB host limit. The OpenCode `/gstack-review` command loaded nothing (#2651). `/browse` disappeared after toggling `skill_prefix` (#2263). Section files linked to checkout copies instead of rendered ones (#2707). skillify pointed at Claude's install on every host. /gstack-upgrade could run git cleanup in your own project when its path variable was unset.
+- **Design.** A design binary killed at launch reported `DESIGN_READY`. /design-consultation and /design-shotgun never loaded your taste profile. Plan reviews read a root DESIGN.md as the feature's design doc (#2840).
+- **/ship, /review and daily tools.** /ship stopped in versionless repos and monorepos (#2334, #2343). The plan audit picked an unrelated plan (#2797). Worktrees split project state (#2792). Learnings search exited 0 without Bun (#2794) and ranked poorly (#2796, #2799). Logs ignored `$TMPDIR` in sandboxed shells (#2952). /plan-tune said "calibrated" with no signals. /setup-deploy printed part of the Render API key (#1096). /analytics durations read 0s (#1728). Rejected taste preferences used the wrong confidence bucket (#1777). /context-save duration was empty on Linux (#2704). /retro missed pytest, minitest, XCTest, Terraform and Bats tests and counted build output (#2812, #2809, #2037). Plan reviews now treat design docs and handoff notes as data (#2818).
+- **Browser.** Browse failed behind `HTTP_PROXY` (#494). Headless browse and make-pdf ignored `GSTACK_CHROMIUM_PATH` (#2771, #1968, #1633); extensions opened a window (#2281). `prettyscreenshot --hide ... out.png` wrote elsewhere (#1419). Stopping the browse daemon took over 5 seconds because every Chromium close waited out its timeout; it now takes about 0.1 s, and a closed headed display no longer waits a second on its own exit. Two browse daemons going headed at the same moment could pick the same free X display, and the loser failed the handoff; it now takes the next free display, and an Xvfb that fails to start reports its own error. `gstack-ios-qa-daemon --help` started the daemon (#1932). Aside in `~/.local/bin` was not found (#2965).
+- **Windows.** /freeze, /guard and /investigate denied every edit and their hooks failed under cmd.exe (#2876, #2354). Generators crashed with EEXIST (#2329). The node-server bundle inlined sharp and socks (#2260), and a minimal install needed `browse/src/server.ts` (#2439). The /cso helper failed on the current SDK and was reported as "install Visual Studio" (#3015). `gstack-config gbrain-refresh` misread status (#1981).
+- **Redaction.** Diagram and vector files flagged as phone and card numbers (#2885, #2827); function calls assigned to `session`/`token` (#2899); `<name>.local.<ext>` config filenames (#2962); four-part versions (#2784); `postgres:postgres@localhost` (#2913).
+- **Plan reviews.** /plan-eng-review writes its QA test plan even while some test choices are still pending, and its findings enter only through Scope Challenge C's saves. /qa-only's test value card no longer points at /qa's record step. /plan-ceo-review says what its closing cleanup does (old CEO plans are archived only with your approval).
+- **Setup.** Auto-update wrote "just upgraded" after a failed setup and never retried. Conductor got the AskUserQuestion preference hook (#2208, #2207, #2719); office-hours asks its questions as `Q1...` prose there (#2729). Team mode's matcher missed Copilot's `skill` tool (#2229). A failed arm64 re-sign left a broken binary.
+
+#### Added
+- `docs/troubleshooting.md`: every gate message, what it means, what is kept, and the command that fixes it.
+- `gstack-memory-ingest --reconcile [--dry-run] [--limit N]` and `--request-reconcile`; `gstack-gbrain-sync --prune-gone-worktrees [--dry-run]`; `gstack-slug --adopt-legacy --from <slug>` / `--dismiss <slug>`.
+- `browse type --selector`, `browse profiles [list|prune --days N]`, `design --version`, `gstack-config set browse_extension_id <id>`.
+- For scripts: `bun lib/outside-review-result.ts --verdict <gate> <file>` prints `VERDICT: clean|findings|unverified|unavailable` (exit 0/3/4/1); the two-argument form is unchanged.
+
+#### For contributors
+- New invariants with free tests: gate outcomes in `lib/gate-outcomes.ts` with a troubleshooting anchor per reason code; a fresh-shell conformance test and a quote-aware bash lint over every generated block on every env-var host; a per-host 160,000-byte SKILL.md ceiling.
+- Eval children no longer receive credential env vars that carry a suffix (`GITHUB_TOKEN_1`, `GITHUB_APP_PRIVATE_KEY_BASE64`); admit one explicitly with `extraAllow` (#2949). Chunked large-push coverage for the pre-push guard (#2915).
+- The test typecheck ratchet ignores the order tsc prints an object type's members in.
+- The weekly eval report counts only cases that ran: tests deselected for another tier or case shard are listed by reason with no credit, every result is attributed to its case (0 unattributed, was 72), and no PR-lane eval shard runs over 10 minutes (the deploy eval is split per case).
+- Codex evals run on their own CI job where Codex's sandbox can start, and pass only when Codex completed a command; a review whose sandbox failed now fails instead of passing. The `/codex review` eval passes only when Codex actually reviewed the diff. The AUQ matrix checks the `(recommended)` marker on option labels, where the auto-decide hook reads it. The `/plan-eng-review` QA test-plan eval now runs the real interactive review instead of a shortcut prompt that skipped the workflow: a periodic checkpoint resumes it at Test review from a recorded Scope Challenge, and the full fresh run is a non-blocking marathon case.
+
+Contributed by @CermakM (#2843), @Haijie-Lee (#2192), @SomSamantray (#2965), @Vaughan-g-aus (#2329), @BharadwajMittapelli (#2729), @maxpetrusenkoagent (#1931, #1932, #1981), @Infiniteyieldai (#2884), @afshaker (#2778), @time-attack (#2232, #2229), @jzeisweiss (#2670), @liutiming (#2783), @agile-operators (#1437), @benjaminberes-bp (#2369), @lewispeel (#2885), @Yugz29 (#2899), @fcmerle (#2962), @cdecook23 (#2784), @mb1810 (#2913), @ntdatt812 (#2949), @pneumorea-ai (#2915), @gabrielrondon (#2811), @kevingrasso32 (#2876), @xwang4-svg (#2354), @DizzyWesterwald (#2936), @oli548 (#2771), @shofel (#1968), @ryanlaiwy (#1633), @yinanli1917-cloud (#2281), @Spooks444 (#2260), @punksterlabs (#2439), @himiaocc (#2492), @jbetala7 (#1419, #1777), @mamedov (#2891), @Lockyer228 (#2651), @topcoder1 (#2263), @jonahberg (#2707), @AlinValentin7 (#3015), @philhie (#2208), @Alchemist-DevAI (#2334), @merit-blake (#2343), @day-of-davon (#2952), @loulanyue (#2797, #2792, #2794, #2796), @Bit0ps (#2840), @szsunyuan (#2799), @frosimanuel (#2818), @JiayuuWang (#1096), @RyanAlberts (#1728), @exGeni (#2704), @Jino00 (#2812), @snig-17 (#2809) and @SholtoMc (#2037).
+
+## [1.91.18.0] - 2026-10-03
+
+**Transcript consent can cover only new sessions or only chosen repos, and Claude Code users can opt into a model-tuned skill overlay.**
+**The safety rules and judges the Opus 5.5 cleanup left alone now have evals and calibration behind them.**
+
+This release closes the follow-ups filed by the v1.91.15.0 prompt cleanup. The cleanup had held six safety rules at their old wording and left the judge prompts untouched, because nothing could show a change was safe. Each now has an eval or a calibration corpus, and only the changes that passed them shipped.
+
+### What changes for you
+
+- **Narrower transcript consent.** The gbrain transcript gate offers "new sessions only", stored as `new@<UTC time>`, which ingests only sessions that started after you answered. `gstack-config set transcript_repos <repo,...>` limits ingest to the repos you name. Turning ingest `off` keeps pages already staged, and only a narrower choice purges them. `gstack-config unset <key>` is new, and every config write now takes a lock.
+- **Opt-in Claude overlay.** `./setup --claude-model <id>` renders the model's tuned skill overlay (opus-4-7, opus-4-8, sonnet-5, fable-5) and keeps it across upgrades and `gbrain-refresh`. `./setup --claude-model claude` returns to the generic overlay, and `./setup --status` shows which one is active.
+- **Design docs follow your state root.** /plan-eng-review, /plan-ceo-review, /plan-devex-review and /autoplan find /office-hours design docs under `$GSTACK_STATE_ROOT` through the new `gstack-design-doc-find` helper, so custom state roots no longer miss them.
+- **/design-shotgun** generates its variants with one `$D variants --briefs-file` call instead of one subagent per variant, then publishes every image with `gstack-design-claim`, so earlier rounds are never overwritten.
+- **/qa and /qa-only** probe loops use readable names (`PROBE_DIR`, `DEADLINE_FILE`, `DEADLINE_TOOL`, `EVIDENCE_TOOL`) and a short "how one probe works" summary. The commands and machine-read markers are unchanged.
+- **Codex outside voice** states its filesystem boundary at normal volume. A 10-trial eval showed Codex still keeps out of `~/.claude/`, `~/.agents/`, `.claude/skills/` and `agents/`. The pair-agent instruction block's divider is fixed.
+
+### Itemized changes
+
+#### Added
+- Six safety-rule evals (`test/skill-e2e-safety-*.test.ts`) and a registry of held safety rules (`test/helpers/safety-rules.ts`) that fails when a listed rule's wording changes without its eval.
+- Judge calibration: `scripts/judge-calibration.ts` and stored corpora in `test/fixtures/judge-calibration`. The arm, qa health-rubric, qa anti-refusal, cross-skill, voice and default workflow judges now send a JSON schema; each passed its flip-rate and false-pass checks against the old prompt.
+- Archaeology lint (`test/archaeology-lint.test.ts`) flags issue numbers, plan IDs and incident stories in runtime skill prose. `bun run audit:manifest` prints the file slices to feed `/claude-api prompt-audit` at each frontier-model release (see CONTRIBUTING.md).
+- The Opus 5.5 dedicated-tools overlay case runs in the periodic lane, and `plan-ceo-review-plan-mode` joins the fast PR profile.
+
+#### Changed
+- The plan-floor assessment cap is 90 seconds (it was 30); the measured p95 is 27 seconds and the slowest run took 31.
+- Parity caps lowered to measured sizes for land-and-deploy and ship.
+- The codex consult section drops issue numbers from its runtime prose.
+
+#### Fixed
+- /review's specialist header counted advisory findings in its total; the header's N is now defined as critical plus informational.
+- Free-lane shards failed with "browser ownership deadline exceeded" when a browse daemon took more than 5 seconds to exit after SIGINT. Reaching the force-kill point now ends the graceful phase instead of recording a cleanup failure; a probe cut off at that point still fails the shard.
+- `bun run audit:manifest` printed backslash paths on Windows.
+- /review and /ship's design-review scope check sourced `gstack-diff-scope` without printing `SCOPE_FRONTEND`, so the agent could not see the value and reran the helper by hand. The block now prints it.
+- Exploratory QA could publish its evidence before listing captures taken before an input change, which left the verdict inconclusive (materialize runs once). The probe loop now says to annotate every capture and mark older-snapshot ones `superseded`.
+
+#### For contributors
+- Five safety rules and the qa workflow, review and cookie judges keep their wording; TODOS.md lists what each needs before it can change.
+
+## [1.91.17.0] - 2026-10-03
+
+**Checkpoints say whether each next step was run, read or guessed, and `/context-restore` verifies the guesses first.**
+**Paid design images are never overwritten, and design skills always show the round you just paid for.**
+
+This wave rebuilds three community PRs from @mvanhorn on current main. A checkpoint's Remaining Work used to read the same whether a step had been run or only inferred, so a resumed session could act on a guess and hit the wrong system (#3004, reported by @tomg65). Running `$D variants` twice into one folder replaced `variant-A.png`, `$D generate --retry` kept only the last image, and skills built boards from fixed `variant-A/B/C` names, so you could pay for images you never saw (#1529, reported by @SakenW).
+
+### What changes for you
+
+- **Remaining Work carries provenance.** Every item starts with `Open.` and ends with how the saving session knows it: `(path run)` with the outcome, `(path read)` or `(path assumed)` for commands, flags, config values and files; `(target state checked)`, `(code read)` or `(path assumed)` for writes. For example:
+
+      1. Open. Run the migration check with SWITCH_B=1 against staging. (path assumed)
+      2. Open. Run bun test test/billing.test.ts. (path run) exit 0
+
+  `/context-restore` keeps the saved order but shows item 2 under **Next steps** and item 1 under **Verify first**, and "continue" starts by verifying item 1 read-only instead of jumping to item 2. Checkpoints saved before this release have no markers, so their command, path and write items land under Verify first, with a one-line banner saying so.
+- **Nothing paid is lost.** A taken image name gets `-2`, `-3` and so on (`variant-A-2.png`); stderr says `note: <requested> exists; saved to <actual> (existing file kept)` and the JSON reports the real path. Every `--retry` attempt is its own saved image. If saving fails after the API returned the image, the bytes go to a private recovery copy in your temp directory and the message says where; a local write failure never buys a second image.
+- **Every image command prints JSON, even on failure**: `requested`, `saved`, `selected`, `failures`, `recovered`. Exit 0 means the result is ready, 2 means nothing was saved, 3 means the run stopped after saving some images.
+- **Boards show this round only.** Skills tell you how many of the requested images were saved, write the round's printed paths to `board-images.json`, build the board with `$D compare --images-file`, archive an old `feedback.json` first, and record `approved_path` in `approved.json`, so a later session opens exactly the image you approved. Old letter-only approvals still work. /design-shotgun subagents stage in a fresh temp directory and publish with `gstack-design-claim`, which never overwrites.
+- **If you script `$D`,** read paths from the JSON instead of assuming the file name:
+
+      out=$($D generate --brief "pricing page" --output designs/pricing.png); rc=$?
+      img=$(printf '%s' "$out" | jq -r .outputPath)
+      [ "$rc" -eq 0 ] && $D check --image "$img" --brief "pricing page"
+
+  `variants` prints its list in `.paths`; `compare` takes it losslessly with `--images-file paths.json`.
+- **Windows console flashes (#1784)** were confirmed fixed on main (v1.91.15.0) by @kaiwulff on a real Windows 11 desktop; this release ships no code for them.
+
+### Itemized changes
+
+#### Fixed
+- `/context-save` Remaining Work did not record whether a step was run, read or assumed, and `/context-restore` offered the first item as the next action (#3004). Marker format from #3019 by @mvanhorn, field-tested by @tomg65.
+- Design images were silently overwritten by later rounds and `--retry` attempts (#1529). Exclusive-create claim idea from #1737 by @mvanhorn.
+- Comparison boards and quality checks read fixed `variant-A/B/C` names or a `variant-*.png` glob and mixed rounds; a stale `feedback.json` could approve a new round.
+- `$D` wrote iterate session files to `/tmp`, which does not exist on Windows, so `generate` could not record its session and `iterate` could not find it there; sessions now live in the OS temp directory.
+- /setup-deploy reported a failing status command as success (the pipe hid its exit code), matched `cd` anywhere in a workflow as a deploy workflow, and left the merge-method check, Fly `/health` detection and GitHub-Actions-only status command unspecified.
+
+#### Added
+- `$D compare --images-file` and JSON-array `--images`, `bin/gstack-design-claim`, `bin/gstack-design-approved`, and `approved_path` in approval records.
+- Periodic behavior eval `context-restore-provenance-order` (3-trial panel) and free contract tests for the provenance markers, `$D` persistence and the design-skill path rules.
+
+## [1.91.16.0] - 2026-10-03
+
+**Installing or upgrading gstack never quietly changes another copy, and `./setup --status` shows every install.**
+**Skills start in worktree-isolated Claude Code sessions, and a review that didn't run says so.**
+
+This release makes three promises hold and backs each with tests. Upgrades used to refresh only Claude Code, so Codex and OpenCode installs drifted for months, and a failed refresh could leave `~/.codex/skills/gstack` empty. Claude Code sessions isolated to a worktree refused every skill's start command. /cso said "No supported findings" when it had assessed nothing, and Codex calls ignored the model you configured.
+
+### What changes for you
+
+- **See every install.** `./setup --status` prints one row per install: host, tier, scope, source, version. Setup and `/gstack-upgrade` end with the same rows and say which host failed and how to retry. Nothing is written by `--status`.
+- **Upgrades refresh every registered host**, each in its own process. A failed host keeps its previous working install. `--host codex` no longer touches Claude's hooks, and a second checkout no longer silently repoints the global Claude link (use `--global` on purpose).
+- **Setup rejects unknown options** before writing anything and suggests the right one. Bare `./setup` installs for Claude Code; use `--host auto` to detect every agent.
+- **Host tiers.** Every host declares a support tier: Claude is `full`; Codex, Kiro, Factory, OpenCode, Cursor and the new GitHub Copilot CLI host are `experimental`; Slate, OpenClaw, Hermes and GBrain are `instruction-only`. On hosts without hooks, /careful, /freeze and /guard say "advisory, not blocked".
+- **GitHub Copilot CLI:** `./setup --host copilot` installs to `~/.copilot/skills` (experimental).
+- **Turn off skills you don't use:** `gstack-config set disabled_skills make-pdf,pair-agent`. Typos get the closest name, `""` re-enables everything, and the setting survives upgrades.
+- **Worktree-isolated sessions start skills.** The start command is one literal line, context recovery moved into `gstack-context-recovery`, and skill blocks no longer `eval` gstack helpers. Installs in renamed folders, project-vendored copies, `CLAUDE_CONFIG_DIR` and `CODEX_HOME` get their own rendered skills that point at the right root; paths with spaces get a space-free alias.
+- **Codex uses your model.** Order: a model named for the request, `GSTACK_CODEX_MODEL`, your Codex `config.toml` (`review_model` first for native review), then `gpt-6-astra`. gstack prints `CODEX_MODEL: … (source: …)` before any paid call and stops with a repair message when the choice is invalid. Outside voices state their own timeout (at most 10 minutes) and are no longer cut off at 2 or 5 minutes.
+- **/cso tells the truth.** A report where nothing was assessed reads "not assessed" with what ran, what's missing, why and the next step. On Windows and macOS a lease whose process ID now belongs to an unrelated process is reclaimed; one unreadable lease left by an older gstack no longer blocks `start`.
+- **make-pdf `--toc`** prints real page numbers and its links survive empty headings and reused ids. If the numbers can't be verified, it exits 3 instead of printing empty cells.
+- **Design images keep working after OpenAI retires `gpt-image-1` on Oct 23.** The design binary uses `gpt-5.5` with image generation pinned to `gpt-image-2`; `GSTACK_DESIGN_MODEL` overrides it, and `bun run design/scripts/live-model-check.ts` checks a key against the defaults.
+- **Upgrade:** run `/gstack-upgrade`, then `./setup --status` to confirm each host, and start a new agent session.
+
+### Itemized changes
+
+#### Fixed
+- Upgrades refresh only Claude Code; Codex and OpenCode installs drift (#1925). A project-vendored setup's earlier capture of the machine-wide Codex namespace is reported by `--status` (#2879). `--host codex` exposed changes to Claude (#2347); `~/.Codex` paths (#2338).
+- Host refreshes copied over the live install, so a failure emptied it; runtime and skill directories are now staged and swapped, including on Windows. Migrations advance only past those that succeeded.
+- Worktree-isolated Claude Code sessions refused every skill's start preamble (#2763). Install dirs not named `gstack` broke skill paths (#1882). Claude Code rewrote `$1`-style tokens in skill bodies (#2896). The plan-mode preamble claimed skill precedence over host restrictions (#2851).
+- OpenCode command files and question tool (#2629, #2626); Hermes frontmatter names and question tool (#2825, #2015); /cso on Codex reported its launcher missing (#2906).
+- Codex model selection ignored your configuration (#2914). Outside-voice timeouts killed Codex early or exceeded the tool limit (#2776). The probe cached success after the binary or auth changed (#2787). Unguarded `mktemp` handed Codex empty paths (#2881). Nested Codex reviews saw gstack's installed skills (#2847).
+- /cso on Windows bricked later runs after a dead or unreadable lease (#2894). /cso reported "No supported findings" for an unassessed scope. The redaction guard flagged `api_key=os.environ[...]` as a secret (#2912).
+- Browse on Windows: EEXIST on an existing `.gstack` (#2048); the terminal agent died with the CLI console (#2637). Windows pre-push guard path regression test (#2805).
+- make-pdf TOC page numbers were empty and anchors shifted (#2903). Design commands hardcoded `gpt-4o` and sent `max_tokens` (#2807).
+- Free tests wrote to the developer's real `~/.gstack` (#2895), left browse daemons running (#2816), called a real `gbrain` on PATH (#2829), and failed on macOS's symlinked temp root (#2841, #2982, #2911, #2909, #2908, #2910).
+
+#### Added
+- `./setup --status`, the install registry (`$GSTACK_STATE_ROOT/installs.tsv`), host tiers and capabilities, and a host conformance test that runs real setup for every installable host.
+- GitHub Copilot CLI host (#393), selectively ported from #2323 by @andrey-esipov with earlier work by @ridermw and @lolisaigao1234.
+- `disabled_skills` config (#1206).
+- OpenSSF Scorecard workflow (#1997) and a macOS named-regressions CI job.
+
+#### Changed
+- Every GitHub Action is pinned to a commit SHA, enforced by a test (#1948). The CI image installs Bun from a SHA-256-verified archive (#1706) and carries a pinned Codex CLI that only Codex eval cases can reach.
+- CLAUDE.md is under Claude Code's 40,000-character warning (#2096).
+
+## [1.91.15.0] - 2026-10-03
+
+**Skills read cleanly on Opus 5.5: stale facts fixed, shouting turned down, and the tests that locked the shouting in now check behavior.**
+**gbrain ingests coding-agent transcripts only after you say yes.**
+
+We ran Anthropic's `/claude-api prompt-audit` (target `claude-opus-5-5`) over every skill template, resolver, model overlay, CLAUDE.md and the code that builds model requests. Then we swept the tests that pin skill wording. gstack had almost none of the old "think step by step" scaffolding. What it did have was instructions that pointed at the wrong file or command, CRITICAL/MUST stacks that current models over-apply, arithmetic the model was asked to compute, and issue numbers it can't use. Those are fixed or rewritten at normal volume, with every real rule and its reason kept. A safety rule only changed wording where an eval shows the model still obeys it.
+
+### What changes for you
+
+- **Transcripts need your consent.** `/sync-gbrain` and the gbrain sync skip Claude Code and Codex session transcripts until `transcript_ingest_mode` is `recent` (last 90 days) or `all`. If you never chose, the sync prints one line saying how. Other memory keeps syncing. Choose with `/sync-gbrain` or `gstack-config set transcript_ingest_mode recent|all|off`. Older stored answers (letters, `incremental`) get asked again. Staged transcript pages wait on disk until you consent.
+- **`proactive=false` means no suggestions at all**, including "want me to run /X?". `gstack-config set proactive true` restores them.
+- **Model overlays:** Opus 5.5, Sonnet 5.5 and other point releases use the generic Claude overlay. The Opus 4.7, Opus 4.8 and Sonnet 5 overlays apply only to those exact models (bare ID, dated snapshot or `-latest`). `--model <family>` forces one.
+- **open-gstack-browser asks before replacing a live browser** instead of killing it, and leaves it running when nobody can answer.
+- **setup-gbrain no longer writes its own CLAUDE.md search block**; `/sync-gbrain` is the one writer.
+- **Upgrade:** run `/gstack-upgrade`, then start a new session.
+
+### Itemized changes
+
+#### Fixed
+- Skill instructions that contradicted the code. Examples: the router's empty telemetry session ID; the design board flow that waited on a command that now exits; an unexpanded `$_DESIGN_DIR` in the reload call; wrong Pretext API signatures in /design-html; a /make-pdf flag that doesn't exist; /land-and-deploy falling back to bare `bun test` and reading only the legacy eval store; stale /ship step numbers; hardcoded `main`/`origin/main`; "Mac only" claims the installer contradicts; tab-state fields the terminal agent misnamed; spec flags that aren't flags; autoplan skipping renamed sections.
+- The shared test bootstrap undoes only the changes it made, instead of a blanket `git checkout`.
+- Skills that read or wrote a literal `~/.gstack` path now use your configured state root (`GSTACK_STATE_ROOT` / `GSTACK_HOME`): canary and health history, plan-tune gates and proposals, retro reads, ship ledgers, the telemetry sink and gbrain context queries. Custom state directories no longer miss data.
+- The browse untrusted-content warning names both marker formats the binary prints.
+- The "never ingest transcripts" choice is enforced in code, not just described.
+- /plan-tune describes the never-ask hook accurately.
+- Seven conflicts between instruction files are settled:
+  - `PROACTIVE=false` means no suggestions, not even an offer.
+  - /sync-gbrain alone writes the CLAUDE.md search block.
+  - /ship uses the checklist's critical categories.
+  - /plan-design-review runs Step 0 before mockups.
+  - DX triage keeps every pass and reports blockers only.
+  - When a DESIGN.md exists, it decides what /design-shotgun varies.
+  - ETHOS.md describes how its principles actually reach skills.
+
+#### Changed
+- **Normal-volume instructions.** CRITICAL / IRON LAW / MUST stacks, thoroughness boosters, fixed progress cadences and model-computed point scores are rewritten as plain rules and stop conditions. Incident and issue numbers move out of runtime prose. The /document-release CHANGELOG-preservation and VERSION-ask rules changed wording only after the document-release eval passed on both the old and new text. Rules without such an eval keep their wording (listed in TODOS.md).
+- **Tests check behavior, not sentences.** Prose-pinning test files keep step order, routing tables, safety lines (matched on meaning) and the markers software reads, and drop exact-sentence pins. Each conversion was checked by a scripted mutation pass: reordering a step, deleting a marker or deleting a safety line turns the test red, while rewording dropped prose leaves it green.
+- **Evals measure the skill instead of coaching it.** The document-release eval no longer tells the agent the answer. The routing evals use the routing text gstack ships. The graders check outcomes rather than exact phrases or emoji. The dedicated-tools overlay case passes on correct output plus at least 20% fewer Bash calls (contract v3).
+- Six paid cases that only had a model summarize SKILL.md are retired, along with duplicate checks. office-hours-auto-mode joins the fast PR profile.
+- New `test/instruction-facts.test.ts` keeps CLAUDE.md facts, /ship step references and state-root paths in step with the code. A config-key tripwire fails when a config key has no reader.
+- CLAUDE.md defines when prompt bytes are a test contract in this repo: when software reads them, or when a recorded eval shows the wording matters.
+
+## [1.91.13.0] - 2026-10-02
+
+**/autoplan runs again for anyone with a SessionStart hook, and /land-and-deploy never merges over red CI.**
+**Projects in nested Git groups stop sharing saved state.**
+
+This release fixes the most severe open bugs from a triage of the tracker. /autoplan's phase guard denied every phase when Claude Code's session journal opened with SessionStart hook output, which is the normal shape once any plugin installs a hook, and on Windows it also rejected forward-slash and `/c/` paths. /land-and-deploy treated "no required checks" as "nothing to wait for", so on any repo without branch protection (every private repo on GitHub Free) it could merge while CI was red or still running. Repos under `group/subgroup/repo` remotes collapsed into one `~/.gstack/projects/` bucket, so /context-restore could offer another project's checkpoint.
+
+### What changes for you
+
+- **/autoplan:** works in sessions with SessionStart hooks, after `/compact`, `/clear` and a forked resume, and on Windows. When it does block, the message names the reason and how to run the reviews by hand (`docs/autoplan-guard-troubleshooting.md`). If a future Claude Code journal shape is unrecognized but healthy, /autoplan warns "phase publication was NOT verified for this session" and continues instead of locking you out.
+- **/land-and-deploy is stricter.** It now waits for all checks on the exact commit it merges, not only required ones, and that includes `gh pr merge --auto`. A red or pending optional check, or a commit with no CI at all, needs your explicit approval for that commit. The verdict comes from `bin/gstack-ci-gate` (`--help` documents it).
+- **Nested-group remotes** (GitLab subgroups, Azure DevOps, Bitbucket Server) now get their own `projects/<repo>-<hash>/` bucket. GitHub buckets do not move. The old shared bucket is left in place; `gstack-slug --adopt-legacy` lists it and copies only the files you confirm. /context-restore only treats this project's checkpoints as latest.
+- **never-ask preferences now fire** (#2901). Questions you tuned to never-ask through /plan-tune will start auto-deciding. One-way questions, including the new land-and-deploy CI approvals, never auto-decide.
+- **Upgrade:** run `/gstack-upgrade`, then start a new Claude Code session.
+
+### Itemized changes
+
+#### Fixed
+- /autoplan publication guard accepts real Claude Code journals: SessionStart attachment chains, a forked session that starts at a compact boundary, and Windows path spellings, with typed reason codes and per-reason messages (#3007, #3009, #2968, #2977, #2986, #3006). Built on #3010 by @CharlesBerg85, with root rules from #3008 by @laurenbdaniels-coder, #2969 by @maydaycyber and #2960 by @elmesery-dev.
+- /land-and-deploy no longer merges over red, pending or missing CI when a repo declares no required checks (#2995). Logic from #3001 by @harshitgavita-07, moved into a tested helper.
+- Nested-group remotes no longer share a state bucket, and checkpoints carry a credential-free project identity that /context-restore checks (#3003, reported by @tomg65). All six slug resolvers share one canonical-remote rule; the sticky cache is versioned so cache hits stay git-free.
+- The AskUserQuestion preference hook reads the same project identity as the writer, so never-ask preferences apply; unknown identity asks instead of auto-deciding (#2901). Idea first proposed in #2332 by @jawadakram20.
+- Brain context loaded 0 bytes in every skill because it called `gbrain list_pages`, an MCP tool name; it now uses `gbrain list` and reports failed queries (#2883). Includes #3000 by @TheAngryPit.
+- /sync-gbrain's code stage failed on managed gbrain (>= 0.51); it now passes `--no-pull` and never retries without it (#2985).
+- /sync-gbrain no longer re-creates duplicate curated pages; `--sources` selects memory types (#2922). Based on #2997 by @harshitgavita-07.
+- A clean Codex review could never pass the /codex gate. Untagged output is now UNVERIFIED instead of FAIL, and P2/P3-only output passes (#2769).
+- `/cso import-sarif` dropped every semgrep and trivy result that used `uriBaseId`; captured scanner shapes now import, and rejected results are counted with the rule and path (#3011).
+- The pre-push redact hook flagged the repo's own 4-part VERSION as a public IP on every /ship (#2856).
+- `gstack-update-check` cached "up to date" when it could not read the remote version; it now caches a short-lived CHECK_FAILED (#2786).
+
+#### Added
+- `SECURITY.md` with a private vulnerability reporting path (#2984).
+- Periodic drift canary that reads fresh journals from the pinned `claude` and fails if the guard stops recognizing them.
+
+#### Changed
+- `pr-title-sync.yml`, which runs with a write token on `pull_request_target`, pins `actions/checkout` to a reviewed SHA.
+
+## [1.91.12.0] - 2026-10-01
+
+**Weekly evals finish in minutes, not hours, and a red now means something.**
+**Two real crash bugs fixed, and product code typechecks clean in CI.**
+
+The weekly paid eval run took 2 hours 45 minutes on Sept 28, almost all of it one timed-out test retried. It now runs every test on its own machine within a 9-minute budget, and a single long case runs one case per process. Automatic retries are gone. Tests that grade a live model's choice run three trials at once and pass on two; promises users rely on (asks before deciding, leaves git alone, no writes in plan mode) fail on any single bad trial. `$B connect --supervise` finally restarts a crashed browser, compiled `/cso` installs can witness runtime-tested assertions again, and a required `typecheck` job keeps that class of bug out.
+
+### The numbers that matter
+
+Source: the Sept 28 weekly census (run 36385945043) and the final proof census on this branch (run 36633323521). `bun run scripts/test-paid-shards.ts --tier periodic --slice-budget 540 --jobs 2 --list` prints the current plan.
+
+| Measure | Before | After |
+| --- | ---: | ---: |
+| Weekly periodic census wall clock | 2h 45m | 11m 42s (gate census alongside: 10m 22s) |
+| Longest planned slice | 160 min (one test, twice) | ~10 min |
+| Automatic retries on paid evals | up to 2 per file | 0 |
+| Product-code type errors | 103 on v1.91.8.0 (no check) | 0, required in `free-tests` |
+| `lib/cso` longest source line | 2,159 chars | 785 (a string literal) |
+
+The biggest change is honesty. With about 240 live cases, a retry used to hide a failing test; now every trial is recorded, `bun run eval:pass-rates` shows each case's pass rate with a confidence range, and a case that slides gets flagged by its history instead of passing on a lucky rerun.
+
+### Fewer rotating reds
+
+Across 11 lanes the PR eval lane failed 6-8 of its 125 records per run, a different handful each time. A census of 1,827 attempts traced most of it to two sources, and this release attacks both instead of retrying:
+
+- **Runs that ran out of time.** Passing runs used 80-92% of their budgets, and the ones that timed out took 20-50% more steps, not slower steps. The heaviest cases now start at the gate they test, from recorded setup and recorded subagent results (docsync faults, shared-libs review, QA callers, Review Army), and land at roughly 35-60% of unchanged budgets.
+- **Bookkeeping the model forgot.** `gstack-qa-evidence` now enforces the checkpoint before every next probe, fills revision/runtime/cwd/learning itself, rejects placeholders, replay-only learning, missing evidence rows and evidence observed on an older input snapshot, prints report links, timing and any declared-but-unrun probes, and answers `--help`. `/deslop-shared-libs` runs every git read through `bin/gstack-safe-git`, which always applies the safety flags.
+
+### What this means for contributors
+
+Run `bun run typecheck` and `bun run typecheck:test` before you push; both are free and take seconds. A red paid run now prints a headline and one line per failure with its cause and a rerun command. New paid evals need a kind in `E2E_KINDS`: see "Add a paid eval" in CONTRIBUTING.md.
+
+### Itemized changes
+
+#### Fixed
+- `$B connect --supervise` respawned with a block-scoped env that no longer existed, so every restart threw and the supervisor gave up after five tries. The headed env is one helper used by connect and respawn, and the loop has behavioral tests.
+- Compiled `/cso` installs called an unimported `join` when launching the assertion-witness child, breaking runtime-tested witnessing for every installed user.
+- Browser-only `/qa` runs had no stated way to build the evidence file, whose rows only accept functional captures; the shared rule now says to materialize an empty evidence list with the checkpoints named in limits, matching `/qa-only`. The fix loop had spent its last minute on it and timed out.
+- `/office-hours` asks its goal question unless the user already chose a mode, then reads that mode's section before its first question; skipping both produced forcing questions with an empty recommendation. `/design-consultation` asks the memorable-thing question on its own after Q1 instead of packing it into Q1's call.
+- Free-form eval judges (docs, outcome, posture) could return JSON broken by an unescaped quote in their reasoning; they now use structured output.
+- `/qa` checkpoint receipts now print the report link for their `exploration-NNN.json` file; reports had been linking `.qa-evidence/NNN` capture folders as checkpoints instead.
+- `/review` Review Army passes checklists to specialists by path and runs web research alongside dispatch (a 12-line N+1 review went from 300 s to 212 s), and the design-lite pass always runs its detector probe; reviews had reported the detector absent without probing in 5 of 6 captured trials.
+- `/design-consultation` opens with one decision (confirm the context and choose research), not a confirm-only question; `/document-release` defines its /ship-owned inputs, exact steps and JSON result.
+- `/review` workflow ambiguities (smoke clock vs required revalidation, setup authority, plan-completion gate, findings record), `/office-hours` builder mode not loading its brainstorm section, `/sync-gbrain` Step 4 helper arguments and write path, `/plan-ceo-review` expansion framing and pacing menus, `/plan-design-review` with no designer API key, and `/deslop-shared-libs` one-file-per-turn reads.
+- Eval detectors that graded wording or step order now grade outcomes: eng batching, CEO split-overflow, mode routing, section-loading stale-fill, outside-voice-disabled attribution, design focus menus, and PTY permission dialogs with cropped titles.
+- Harness races and adapter gaps found by the proof runs: plan seeding accepted a stale empty input box when the CLI repainted after recording its reply, the third-party-actions recorder fixture lost every failure record, the autoplan dual-voice check could not read framed subagent reports from newer Claude Code, and the HOLD SCOPE routing check judged the skill's own defer/keep menu as its rigor decision, the outside-disabled check missed a correctly attributed quote of the pre-existing review record, and the plan-review judge was not told its reason length bound on the field it writes.
+
+#### Changed
+- Paid evals: one test file or case per machine within a 540-second slice budget, planned from recorded per-tier and per-case durations; case sharding for plan, design, review-army, shared-libs, shared-libs-paths, ship-docsync and qa-callers.
+- Verdict policy: no retries; `rule` cases fail on any failed trial, `behavior` cases pass on 2 of 3 parallel trials with contract assertions still strict, `judge` entries average 3 samples against unchanged thresholds. One panel-verdict function feeds the report, PR comment, weekly issue and pass-rate history. A census whose every red is infrastructure is re-dispatched once, and both runs are reported.
+- New non-blocking weekly `evals-marathon.yml` lane for full start-to-finish flows: the full `/office-hours` workflow (a focused design-draft case replaces it in the weekly lane) and the full `/plan-ceo-review` split-overflow run, which took 8 to 20 minutes on its own.
+- The CI image pins Claude Code 2.1.284, the first version that recognizes the eval model `claude-fable-5-1` and runs it with the same profile users get. Both versions send effort "high"; a census that looked slower on 2.1.284 was mostly slower API responses (its SDK-only judges, which never start the CLI, were 25% slower too), and nine previously slow cases pass on 2.1.284 within unchanged budgets.
+- `lib/cso/*.ts` is formatted with pinned Prettier; minified transpile output is byte-identical except three canonicalized regex flag orders.
+- The duplicate dispatch-only `ship-docsync` case is removed; `ship-docsync-completion` asserts the same on the same fixture.
+
+#### Added
+- `tsconfig.json`, `bun run typecheck` (strict, zero product errors) and `bun run typecheck:test` (test-code diagnostic ratchet), both in the required `free-tests` check, plus `format:cso:check`.
+- `E2E_KINDS`, `BEHAVIOR_WHY`, `EVAL_POLICY` and a data-driven `CASE_QUARANTINE` (entry below 95% per trial over 10 trials, exit at 97%, 10% cap, 8-week expiry, never for product defects), and `CASE_CI_EXCLUDE` for CI-unrunnable cases.
+- `bun run eval:pass-rates` with Wilson intervals, per-input-identity series and a weekly drift gate; `--case <id> --trials N` for local diagnosis.
+
+#### For contributors
+- Open PRs touching `lib/cso` should run `bun run format:cso` before rebasing.
+- Builds on the typecheck work in #2447, contributed by @laddtnov.
+- Coordinated with #2994 (v1.91.8.0), which retired the never-green finding-count evals this wave had been repairing.
+## [1.91.11.0] - 2026-09-30
+
+gstack now looks up its state folder one way everywhere, and the five most copy-pasted or oversized parts of the codebase each have a single owner. Before, about 50 scripts, hooks and libraries each resolved the state folder with their own rule, and the rules disagreed. If you set `GSTACK_HOME`, `GSTACK_STATE_DIR` or `GSTACK_STATE_ROOT`, telemetry, analytics, update-check snoozes, the egress ledger and hook logs now all land in the folder you chose. Nothing is moved for you. Run `~/.claude/skills/gstack/bin/gstack-paths --explain` to see the active folder and whether `~/.gstack` still holds older state; [docs/state-root.md](docs/state-root.md) has the move recipe.
+
+| Hotspot | Before | After |
+| --- | ---: | ---: |
+| Code files with a hand-rolled `${GSTACK_*:-…}` chain | 48 | 2 (the bash owner and one allowlisted partial-upgrade fallback) |
+| `browse/src/server.ts` lines (`buildFetchHandler` alone) | 3,464 (1,560) | 2,224 (~350) |
+| `test/helpers/claude-pty-runner.ts` lines | 5,047 | 30 (barrel over `test/helpers/pty/*`) |
+| `scripts/resolvers/review.ts` lines | 1,921 | removed (5 modules, largest 771) |
+| Shard spawn/kill/sandbox implementations | 2 | 1 (`scripts/lib/shard-engine.ts`) |
+
+### Changed
+
+- **One state-root rule.** Every script, hook and skill resolves state as `GSTACK_STATE_ROOT` → `GSTACK_HOME` → `GSTACK_STATE_DIR` → `CLAUDE_PLUGIN_DATA` (only for the gstack plugin) → `~/.gstack`. Skill bash blocks stop with a reinstall message if the resolver is missing, instead of writing under `/`.
+- **Privacy opt-outs never get looser.** `telemetry`, `memorable_recall`, `codex_reviews`, `update_check` and trust-policy denies take the most restrictive value across the active folder and `~/.gstack`. `gstack-config set` says when another folder still overrides you and prints the command that fixes it, and `gstack-config list` shows which folder each merged key came from.
+- **Uninstall deletes state only at `~/.gstack`.** `gstack-uninstall` refuses (exit 2) when that path resolves to `/`, your home, the gstack checkout or the current repository. For a relocated folder it leaves the folder in place and prints the exact removal command.
+- **Outside-voice fallbacks read the same in every skill.** `/plan-devex-review` now also treats an "API key" error as an authentication failure, `/office-hours` names its fallback subagent like the other skills, and the `/review` and `/ship` adversarial pass says "timed out after 9 minutes" (a timed-out pass is still missing coverage).
+- `/review` and `/ship` exploratory QA now say how required plan checks behave once the 5-minute smoke clock expires: they and their revalidation keep running on a per-command `--timeout-ms` and still publish checkpoints, while a smoke recheck after expiry is reported not-run. In `/review`, skipping a finding that carries a proposed test skips both the test and the fix, and the defect stays unresolved.
+- After a revert of this release, state written to a non-default folder while it was live stays in that folder.
+
+### Fixed
+
+- A pair-agent setup key that had not been exchanged yet was accepted as a bearer token on the browse daemon's `/command`, `/batch` and `/file`. A setup key now authenticates only the `/connect` exchange.
+
+### For contributors
+
+- **State root:** `lib/state-root.ts` (`resolveStateRoot`, `readConfigKey`) and its bash twin `bin/gstack-state-root.sh` (builtins only) own the chain. A parity table runs every row through both with `PATH` empty, Windows rows included. `test/state-root-ratchet.test.ts` rejects new hand-rolled chains, and `test-setup.ts` strips inherited `GSTACK_STATE_ROOT` / `GSTACK_STATE_DIR` so ambient variables cannot leak into tests. `hosts/claude/hooks/hook-log.ts` is the five hooks' one error-log writer (0600).
+- **Browse routes:** the daemon's HTTP routes are one declared table (`browse/src/routes/table.ts`: method, path, auth kind, listener surface), with one auth gate, one denial per auth kind, and handlers in `browse/src/routes/*.ts`. A black-box matrix over every route, both listeners and five credential types passed on the old server and passes unchanged on the new one. The route tests now send real requests instead of grepping `server.ts`, and `browse/test/server-route-dispatch-ratchet.test.ts` keeps dispatch inside the table.
+- **Shard engine:** `scripts/test-strict-output.ts` grew into `scripts/lib/shard-engine.ts` (process-group spawn, wall timeout and group kill, strict Bun verdicts, per-shard tmp and Chromium sandbox, logs, duration seeds, flag loop), and both runners use it. Lane policy stays per lane. A seven-outcome fixture corpus recorded from the old runners pins identical verdicts, and paid `--list` output is byte-identical. A timed-out free shard now stops reading at its deadline, as the paid lane already did.
+- **PTY harness:** `test/helpers/claude-pty-runner.ts` is a barrel over `test/helpers/pty/*` (screen, launch, classify, auq, plan-native, boundaries, judge). One `runPtySession` loop drives the observation, counting and floor runners. A scripted fake PTY driver (`pty/fake-session.ts`) with an injectable clock runs each runner deterministically, and the unit test is split along the same modules. Tests keep importing the barrel.
+- **Review resolvers:** `scripts/resolvers/review.ts` is split into `review-dashboard.ts`, `plan-gates.ts`, `spec-review.ts`, `outside-voice-steps.ts` and `review-scope.ts`. Generated output is byte-identical except the fallback wording above, which now comes from `outsideVoiceFailurePolicy()` in `outside-voice.ts`; `test/outside-voice-failure-policy.test.ts` rejects hand-written copies.
+- **Ratchets:** `test/module-size-ratchet.test.ts` keeps the new owner modules at or under 800 lines and 150 lines per function, and stops the residual files (`server.ts`, both runners) from growing. `test/touchfiles.test.ts` checks that every moved module still selects the paid evals its source file selected (goldens in `test/fixtures/touchfile-moved-code/`, recorded before the move).
+- **Budgets:** the guarded `gstack-paths` line in always-loaded preambles moved a few budgets to their measured values, each with its derivation recorded: carve-guards for ship (1.397 → 1.404), plan-ceo-review skeleton (80,150 → 80,850 bytes), plan-eng-review (1.169 → 1.174), design-consultation (1.08 → 1.085) and qa (1.095 → 1.102), and the `unfreeze` eager ceiling (393 → 448 tokens).
+- **Webhook fix eval:** `qa-functional-webhook-fix` no longer asks the model to rerun all eight webhook scenarios after its repair; the harness already reruns all eight on the repaired source, and the report-only webhook eval still requires eight-scenario coverage. The fix eval now asks for the same post-repair probes as the CLI fix eval, which brings a passing run from about 244s to 133-214s of its 285s budget (3/3 local passes).
+- **Deferred:** `TODOS.md` "P3: next refactor wave" lists the hotspots this wave did not touch and the behavior bugs it found and left alone.
+
+## [1.91.9.0] - 2026-09-29
+
+Every gstack workflow that proposes, writes, reviews or ships tests now applies one test value bar: a test earns its place by protecting behavior a real regression would break, and test count is not a goal. `/ship`'s coverage gate counts only tests that clear that bar, and the new `/test-audit` sweeps existing tests for ones that cost more than they protect.
+
+`/ship`'s coverage number can drop for unchanged code, because a path covered only by a smoke test (★) no longer counts. The gate shows both numbers, for example:
+
+```
+Before: Coverage gate: 81%
+After:  Coverage: 58% value-weighted (81% including 4 weakly covered paths)
+```
+
+No action required; the gate still only asks.
+
+### Added
+
+- `/test-audit [path ...] [--since <ref>] [--max-candidates N]` finds low-value, implementation-coupled and duplicate tests and the test-only exports they keep alive. A mechanical pre-filter runs before any model reading, every candidate carries a complete retirement card (what it detects, non-test callers with the search command, stronger remaining proof, history, what retiring it unlocks, validation), and SKILL.md goldens and other contract tests are retained. The report and a JSON sidecar land in `~/.gstack/projects/<slug>/`. Nothing is edited unless you approve a batch; spawned and headless sessions stay report-only.
+- `docs/test-value-bar.md` explains the authoring gate, value and retirement cards, weak paths, the value-weighted (X) and any-test (Y) coverage numbers, base control, the overrides and every degraded-mode message.
+- Optional CLAUDE.md `## Test Coverage` keys: `Generation cap:` (default 5), `Base control:` (`auto` or `off`), `Base control budget:` (seconds, default 90) and `Star rating:` (`auto` or `off`). A `gstack:test-value keep reason="..."` comment makes `/review` and `/test-audit` skip a deliberate test and report the reason.
+
+### Changed
+
+- `/ship` Step 7 extends existing tests before writing new ones and writes at most 5 tests per generation pass (was 20). Each generated test carries a value card header. The parent rejects and removes tests with an incomplete card, a duplicate `protects` or a seam with no non-test caller, and a separate read-only pass rates the tests written in the run. The gate reads the value-weighted `coverage_pct_value`, falls back to `coverage_pct` with an upgrade note when an older skill omits it, and never substitutes 0. In spawned sessions it generates only for true gaps and lists weak paths as proposals.
+- `/ship` regression tests must fail at HEAD before the repair and pass at the base branch in a temporary worktree (Node/Bun), within 90 seconds per test and 3 minutes per run. Other ecosystems record "base control unavailable" with a four-command manual check.
+- The PR body adds `Test value: K tests written, R rejected by the authoring gate, E existing tests extended, W paths weakly covered`, and Step 20 metrics record `coverage_schema: 2`, `coverage_pct_value`, the weak, extended and rejected counts, and regression-proof counts.
+- `/plan-eng-review` and `/plan-ceo-review` state one rule: every behavior tested, no test without a regression it would catch. Test plans carry a value card per critical path and edge case, plus a `## Tests to Retire` section that `/test-audit` reads as seeds.
+- `/review`'s testing specialist reports source-grep tests, test-only exports and other low-value tests in the diff as INFORMATIONAL findings with caller-search evidence, never as auto-deletes, and flags regression tests without red proof. A gap closed only by a low-value test stays a coverage gap at its existing severity.
+- `/qa` and `/qa-only` apply the bar's last two questions before writing or proposing a regression test and record its value card.
+
+### For contributors
+
+- `scripts/resolvers/test-value.ts` owns the shared constants, the `{{TEST_VALUE_BAR:<mode>}}` and `{{TEST_VALUE_MESSAGE:<key>}}` placeholders and per-mode byte ceilings (measured renders plus 15%: plan 1,897, ship 2,742, qa 1,036, audit 3,712 bytes). Adapted from openclaw/openclaw@a214e76 `.agents/skills/test-audit`. The unreachable `review` branch of the coverage audit is deleted.
+- `test/test-value-bar.test.ts` checks each mode's contract text and ceiling, the ship gate's decision rows, the rejected-file removal script in a Git fixture, the static review specialist's sync with the constants, docs anchors and skill registration. Three gate evals in `test/skill-e2e-test-value.test.ts` cover a weak path in `weak_gaps`, low-value review findings with a retained golden, and a report-only `/test-audit`.
+- Budgets moved for the new skill and the embedded bar, each at its measured value with the derivation recorded: catalog 1,171 → 1,194 token-equivalents (`/test-audit` adds 92 bytes), always-on context 6,465 → 6,873 tokens, a new `test-audit` eager ceiling of 10,439 tokens, and carve-guard union ratios for ship (1.322 → 1.397; the lazy Step 7 section grows about 13.6KB), plan-eng-review (1.151 → 1.169) and qa (1.08 → 1.095). The paid census pins count the new gate file.
+- The context-budget and ship golden fixtures are audited free-only PR inputs, so editing them no longer restores every paid gate case.
+- `test/pr-shared-input-selection.test.ts` no longer depends on whether the local `package.json` differs from its merge-base.
+- The catalog estimate in `test/skill-size-budget.test.ts` lists skills from `HEAD`, the same tree it reads, so a staged but uncommitted skill no longer breaks it.
+
+## [1.91.8.0] - 2026-09-29
+
+The test suite is smaller and every remaining test maps to a product contract: 227 fewer test files, about 90,000 fewer lines of tests, helpers and fixtures, and the weekly paid lane drops the five evals that were red eight runs straight. Free tests that only replayed one captured failure are folded into their detector's owner test, and paid eval selection is derived from each eval's own imports instead of hand-copied lists.
+
+| Measure | Before (v1.91.6.0) | After |
+| --- | ---: | ---: |
+| Tracked test files | 1,184 | 957 |
+| Test-file lines (all `*.test.ts`) | 279,640 | 244,504 |
+| `test/` TypeScript lines (tests + helpers) | 274,208 | 227,713 |
+| `test/helpers` lines | 51,390 | 39,427 |
+| `test/fixtures` bytes | 16.3 MB | 9.7 MB |
+| Free suite files / passing tests (Ubicloud standard-16) | 1,065 / 27,331 | 857 / 20,302 |
+| Free suite serial seconds (recorded durations, same machine class) | 1,888 | 1,738 |
+| Paid files / gate-lane files / periodic files | 119 / 58 / 100 | 100 / 42 / 69 |
+| Weekly gate-census files | 58 | 41 (LLM judges run in the periodic and PR lanes) |
+| Weekly periodic shard-minutes spent on files this release removes (09-21 run) | 235 of 462 | 0 |
+
+The table compares v1.91.6.0 with this branch before it merged v1.91.7.0, which adds its own functional-QA and documentation tests. With both, the free suite runs 914 files (2,066 recorded serial seconds), the paid census has 104 files (46 gate, 70 periodic), and the weekly gate census runs 45 files in seven slices. v1.91.7.0's new paid cases follow the same derived-touchfile rule, and its new helper-only tests are listed in the ratchet baseline.
+
+### Removed
+- The never-green finding-count cluster: `skill-e2e-autoplan-chain` and `skill-e2e-plan-{ceo,eng,design,devex}-finding-count`, whose weekly failures were harness and budget failures, never skill behavior (triage in `docs/test-audit-2026-09.md`). No paid eval now proves a live model completes the full `/autoplan` chain or asks one question per finding; both gaps have TODOS entries with re-entry tests. The dedicated eighth periodic slice and `AUTOPLAN_CHAIN_BUDGET` go with them.
+- Paid files that asserted nothing or could not pass: `skill-llm-eval-spec`, `skill-e2e-spec-execute`, `gemini-e2e` (no Gemini CLI in CI), `skill-e2e-ship-idempotency`, `skill-e2e-conductor-prose`, `codex-e2e-plan-format`, `skill-e2e-brain-privacy-gate`, `skill-e2e-opus-47` (its negative routing controls moved into `skill-routing-e2e`) and two duplicate overlay wrappers; `test:gemini` scripts removed.
+- Free tests of dead eval code, product tests that exercised copies of the product, and test-infrastructure dead code.
+
+### Changed
+- Tests that faked the product now drive it: the design `serve()` server, terminal-agent `/internal/grant` and `/internal/revoke` bearer auth, `/health` liveness, and brain-sync consent before egress.
+- Per-incident replay files are folded verbatim into twelve detector owner tests (listed in `docs/TEST_PORTFOLIO.md`), keeping every captured case.
+- Paid touchfiles are derived: `test/touchfiles.test.ts` checks that each case's key covers its eval's static helper/fixture imports and the fixture paths it names, and free `*.test.ts` files are no longer touchfiles, so editing a free test no longer selects paid evals.
+- The paid planner skips a file for a tier lane when every E2E id it registers belongs to the other tier (the hollow shards), and the weekly gate census skips the LLM judges.
+- Seven paid evals that pinned `claude-opus-4-7` or `claude-sonnet-4-6` now capture with the default model from `resolveEvalModel`; all passed on it. Four more (`skill-e2e-design`, `-office-hours-phase4`, `-plan-prosons`, `-plan`) keep `claude-opus-4-7` because six of their cases failed on the default model; TODOS tracks re-pinning them.
+- memory-pipeline, ios-qa, ios-qa-swift-build and plan-tune-cathedral make no model calls and now run in the free suite; CI-unrunnable Codex, Aside, outside-voice and iOS-device files are excluded from the weekly lane with a tracked re-entry condition.
+- The plan-count history PTY test waits for its startup marker instead of a fixed 8-second sleep.
+
+### Fixed
+- The `/plan-design-review` UI-scope gate eval recognizes a Design finding by the review's own issue-numbered options (`1A`, `1B`, …) as well as by UI vocabulary, so a real finding about hierarchy, navigation, state tables or confirmation patterns no longer goes uncounted until the 600-second cap. It timed out on v1.91.7.0 in one of two local runs and on this branch's CI; both fixed runs finished in about 420 seconds.
+- `bun run test:ubicloud` no longer reports `pull failed` when a run leaves no flake ledger in `/tmp`: a retrieval glob that matches nothing is skipped with a note, and the retained shard logs still land in `.context/ubicloud/<timestamp>/free-test-logs/`.
+
+### For contributors
+- When a paid eval fails, fix the product or harness and add the captured case as one row in the detector's owner test; `test/test-of-test-ratchet.test.ts` fails on any new test file that imports only `test/` code and names the owner test to extend. `CONTRIBUTING.md` "Test tiers" has an example.
+- Deleted `test/helpers` modules and where their live cases went:
+  - `autoplan-setup-question`, `ceo-approach-pick`, `ceo-completion-handoff`, `ceo-payment-findings`, `design-artifact-question`, `design-count-fixture`, `design-count-outside`, `design-count-review`, `devex-count-fixture`, `devex-seed-coverage`, `eng-count-question-policy`: consumed only by the retired finding-count evals; runner tests that used them as caller policies now use inline policies, and the omitted-`multiSelect` default moved to `test/plan-review-decisions.test.ts`.
+  - `autoplan-phase-order`, `pty-current-screen`: never wired; the settings-overwrite card assertion moved to `test/helpers/claude-pty-runner.unit.test.ts`.
+  - `ceo-paired-fixture`, `design-ui-scope`, `plan-skill-completion`, `required-reads`, `transcript-section-logger`, `eng-finding-fixture`, `eng-completion-handoff`, `eng-retained-corpus`, `captured-paths`, `gemini-session-runner`: no live cases.
+- `test/helpers/resolve-repo-path.ts` resolves specifiers and path literals for both the ratchet and the touchfile closure check. The full evidence (inventories, selection proof, security mapping, retained false positives) is in `docs/test-audit-2026-09.md`.
+
+## [1.91.7.0] - 2026-09-28
+QA can test APIs, CLIs, jobs, workers and webhooks with the project's own tools,
+without starting a browser. Review and ship now run bounded exploratory checks,
+and every ship audits relevant documentation before final verification and publication.
+
+### Added
+
+- Functional QA checks native outputs and durable effects, including invalid inputs, authorization, cancellation, retries, duplicate delivery, concurrency and recovery. Reports distinguish failures, blocked probes and untested contracts; browser and functional results stay separate.
+- Exploratory QA turns observations into targeted probes and proposed regression tests. Written evidence checkpoints connect each observed result to the next probe and are linked from the final report. Authorized repairs require a reproduced defect, a regression that fails before the repair, and successful regression, original-probe and adjacent-path checks when the native test infrastructure supports them.
+
+### Changed
+
+- `/qa` and `/qa-only` load instructions for the selected surface on each supported host. Functional and report-only runs never bootstrap a framework or inherit browser setup permission; `/qa-only` preserves product code, tests, configuration and Git state.
+- `/review` and `/ship` run bounded exploration even on small non-browser diffs without a plan or server. Required checks remain required when blocked or unfinished, and proposed tests retain the parent's approval gates.
+- Review collects checklist, specialist, QA and adversarial findings before one parent-owned fix phase. Re-review keeps the same three-cycle limit, reruns affected probes and records incomplete coverage honestly.
+- Every ship consumes a completed documentation audit before final checks and publication, including uncommitted changes and existing-PR or repeat runs. Failed, stale or unsettled child results cannot silently become a clean audit; the parent retains release metadata and Git ownership.
+
+### Fixed
+
+- Report-only QA completes its scope and method Reads before setup, and preserves exact public fixture paths in evidence instead of inventing redacted paths. Actual secrets and private payloads remain protected.
+- Ship's workflow quality judge uses a 64k streamed, structured response within its existing deadline; other judges retain their 8k allowance. Cache identity includes the actual cap, transport and response contract, and incomplete or malformed scores remain failures.
+- Repeated QA runs preserve prior reports, baselines and exploration notes. Browser techniques follow the same checkpointed probe order as functional QA, and mixed reports keep each surface's evidence and scores separate.
+- Ship's two-pass test-generation allowance includes the initial attempt, failures and zero-test results. Duplicate design findings share one action while retaining both reviewers' evidence, statistics and the stricter approval requirement.
+- Ship keeps repair and late-change instructions in the steps that own them. Nested repairs preserve their return destination, and release preparation requires matching review records before version or documentation writes.
+- Reusing skipped shared-code advice now relies on executable checks of the captured branch and eligible raw source evidence. Unsupported Git states, transformed paths and records without trusted coverage provenance cannot certify a previous decision.
+- Paid-test `--list` also stays read-only with a saved plan and selected slice: it validates and lists the selected work without API preflight, test launches or result files.
+- Functional-QA test fixtures enforce their declared foreground command boundary before execution, and shared native-event decoding rejects malformed or incomplete evidence while preserving caller-specific handoff rules.
+- Native plan fixtures accept byte-exact seeds inside Claude's paste envelope without accepting fused or changed content. QA fixture completion avoids duplicating its checkpoint ledger, and caller fixtures distinguish absolute deadlines from start times.
+- Free tests retain private full logs, fail when evidence cannot be saved, and give an actionable recovery step. Linux and Windows CI collect the retained logs. Refreshed timings make new fast regressions reachable through the existing quick lane without removing complete-suite coverage.
+- The Ubicloud wrapper retrieves retained free-test logs and any retry ledger before destroying its VM.
+
+## [1.91.6.0] - 2026-09-28
+
+PR eval slices are balanced by how long each eval actually takes, so the slowest slice no longer carries most of the run.
+
+### Changed
+- The paid eval planner re-packs slices using recorded per-file wall times from real CI runs (`scripts/paid-test-durations.json`). It starts from the existing supervised allocation and only moves or swaps a file out of the heaviest slice when no slice's worst-case wall, for 1–4 workers, rises above that allocation's maximum, so CI timeout coverage never gets weaker. Estimated from the recorded times with two workers per slice, the heaviest slice for a typical PR run drops from about 15 minutes to 12 (the length of the single longest eval), and for the full gate census from about 17 minutes to 13.
+- `bun run scripts/test-paid-shards.ts --report <dir> --write-durations` merges a report's executed single-file shard times into the seed. Skipped-only and sub-second shards are ignored.
+
+## [1.91.5.0] - 2026-09-28
+
+The free suite now finishes in about half the time on a 16-core Linux machine, `bun run test:ubicloud` runs it on a fresh 16-vCPU Ubicloud VM from any dev box, container, or cloud sandbox, and re-pushing a PR no longer waits behind the previous commit's eval run.
+
+### Added
+- `bun run test:ubicloud [test:free args]` runs the complete free suite on an ephemeral Ubicloud VM (`UBICLOUD_API_KEY` required; `UBI_SIZE` and `UBI_LOCATION` choose the machine). The VM gets the required CI lane's environment and strictness settings, uncommitted edits are included, shard logs are copied to `.context/ubicloud/`, and the VM is always destroyed afterwards. A full run takes about four and a half minutes end to end, compared with seven and a half minutes of suite time alone on a 4-vCPU machine.
+- `bun run test:ubicloud --record-durations` refreshes `scripts/free-test-durations.json` in that same environment and copies it back.
+- `scripts/ubicloud/ubi-runner.sh` runs any command on a Ubicloud VM (`run`, or `up` / `ssh` / `sync` / `pull` / `down`). It needs only bash, curl, python3, ssh, and tar locally, and it removes its own stale VMs after 12 hours.
+
+### Changed
+- On Linux, `bun run test` now starts one shard per available CPU, up to 16; macOS and Windows keep the limit of six. On a 16-vCPU VM, 16 shards finished the suite in 137 seconds and six shards took 327 seconds.
+- The duration seed is re-recorded with browser, display, and CSO tests actually running, and the slowest test file is split into four files. On a 16-vCPU run, all 16 shards now finish within about 15 seconds of each other, where one shard used to take twice as long as the rest. The 20 CI shards are packed with the same seed.
+- Full-suite and CI planning runs name any test file missing from the duration seed, so a slow new file cannot quietly become the long pole.
+- The Windows CI lane gets the same single serial retry for attributed failures as the required Linux lane, and uploads its flaky passes as a `flake-ledger-windows` artifact. Its process-supervision timing tests pass when run alone but can stall under the lane's two-shard load.
+- A new push to a pull request now cancels the previous commit's paid eval run. The eval slice, report, and comment jobs run unless the workflow is cancelled (`!cancelled()`) instead of unconditionally (`always()`), so they still run when the image build is skipped or a slice fails, but a superseded run no longer finishes (and bills) its slices while the new commit's run waits behind it. A workflow test fails if any eval job goes back to a job-level `always()`.
+- LLM-judge skill quality evals require a clarity score of 3 instead of 4; completeness and actionability bars are unchanged. The cookie setup judge keeps its manually approved thresholds.
+- Two timing-sensitive tests allow for a heavily loaded machine: the terminal-agent startup race waits up to 8 seconds for a cold agent start, and the invalid Retry-After cases accept timer delays below the next 4-second backoff step.
+
+## [1.91.4.0] - 2026-09-28
+
+Windows users can copy signed-in cookies from Opera and Opera GX into gstack's browser. On Windows, where Chrome, Edge and Brave increasingly store App-Bound Encryption cookies that gstack cannot decrypt, Opera and Opera GX still use DPAPI-protected cookies, so they may be the browsers where import keeps working.
+
+### Added
+- `cookie-import-browser opera` and `opera-gx` (also `operagx` and "Opera GX") on Windows, read from `%APPDATA%\Opera Software\Opera Stable` or `Opera GX Stable` in `Default` or `Profile N` directories. Legacy root-level layouts, Opera side profiles and portable installs are not detected. Includes the Opera registry and Roaming-root contribution from @mvanhorn in #2980 (refs #2957).
+
+### Fixed
+- Windows v10 cookies from current Chromium databases decrypted with 32 bytes of hash in front of the value, so imports could report success while the site stayed signed out. The SHA-256(host_key) prefix is now removed when present, for Chrome, Chromium, Edge and Brave as well as Opera.
+- App-Bound Encryption rows in a browser without native extraction keep their receipt (counts and reasons) and name the recovery: `$B handoff`, sign in, `$B resume`. Partial imports warn that the session may not be restored.
+- Missing browsers, missing profiles and ambiguous profile selection now say what was checked and what to run next, including which OS supports a browser and the typeable browser names available on this one. CLI receipts list failure reasons.
+- A relative `APPDATA` no longer redirects the Opera root.
+
+### Changed
+- BROWSER.md has a Windows Opera walkthrough and tables for receipt failure reasons and import error codes; a free test keeps the browser lists in the docs and command reference in step with the registry.
+- A Windows CI test decrypts a host-bound Opera cookie with real DPAPI through the Node server runtime. Real Opera sessions on Windows are still awaiting confirmation from the issue reporter.
+
+## [1.91.2.0] - 2026-09-25
+
+`/sync-gbrain` can check whether the current worktree's pages are readable without writing a probe page or deleting guidance when the answer is uncertain.
+
+### Fixed
+- Readiness now matches the registered source to this worktree before checking its page count, then reads a page from that same source. A foreign pin, failed read, invalid count, or unavailable service stays `unknown` and preserves existing guidance; a verified empty source can still offer reindexing.
+- The Windows readiness fixture invokes the same Bun-backed `gbrain` command through a `.cmd` shim and preserves the inherited PATH spelling and separator.
+- Importing terminal-agent helpers no longer boots the CLI or installs global process handlers; direct launches still enforce their startup-record check.
+- The developer-experience question-floor check recognizes a grounded target choice by its structure rather than one phrasing, without accepting unrelated answers.
+- Engineering review follows its preparation and complexity-gate paths in order, keeps each decision and required report write verifiable, and never enables calibration write-back without its explicit gate.
+
+### Changed
+- The PR evaluation plan includes source-scoped readiness coverage and the resulting judge and supervision budgets without reducing individual test timeouts, retries, or concurrency.
+
+## [1.91.1.0] - 2026-09-25
+
+### Fixed
+
+- Find Impeccable installed through the Claude Code plugin marketplace, including a trusted custom `CLAUDE_CONFIG_DIR`. Preserve traditional skill installs and the existing explicit-engine, PATH and standalone-cache priority.
+- Select plugin versions deterministically with strict semver ordering and support for hash-named versions. Keep a selected installation's launcher, engine and engine version together instead of borrowing an older plugin's engine.
+- Use the same strict ordering for the standalone engine cache, retaining its semver-only policy and precedence. Do not follow cache directory symlinks or repository configuration links into unrelated filesystem trees.
+- Preserve repository and symlink execution boundaries, sanitize discovery diagnostics, and quote or suppress launcher hints when a filename cannot be represented safely. Discovery never downloads or runs a launcher; engine compatibility warnings and install consent remain unchanged.
+- Compare canonical HOME paths at the trust boundary, so home-directory aliases and dotfiles repositories do not hide user-installed engines or admit private home files as scan targets.
+- Add plugin discovery, handoff, malformed-version and adversarial-path regressions, plus Windows-safe discovery cases selected by the native Windows test lane.
+
+Includes the plugin-cache discovery contribution from @SomSamantray in #2976.
+
+## [1.90.2.0] - 2026-09-24
+
+**Spend less time waiting for tests.**
+**Merge with clearer safeguards.**
+
+The local test runner uses available CPUs and removes repeated setup without removing test scenarios. Independent question checks run concurrently rather than waiting for one another. `/land-and-deploy` ties your approval to the selected PR, head and destination branch, checks server state before a merge fallback, and keeps missing deployment evidence visible.
+
+### The three numbers that matter
+
+Source: matched Linux component benchmarks in [docs/TEST_PORTFOLIO.md](docs/TEST_PORTFOLIO.md), which names the test files, workload and coverage. The live comparison runs both periodic AUQ files with five independent captures. These are separate component measurements, not a complete paid-suite or CI speedup.
+
+| Workload | Before | After | Δ |
+|---|---:|---:|---:|
+| Nine synthetic-terminal test files | 165.87s | 72.98s | −56% |
+| Publication polling and watchdog tests | 56.57s | 9.63s | −83% |
+| Two independent-question test files | 325.09s | 136.40s | −58% |
+
+The synthetic-terminal checks save about 93 seconds of repeated waiting. Question checks retain every independent trial and their original grading rules; parallel execution is not permission to substitute one successful answer for several samples.
+
+### What this means for developers
+
+Use `bun run test` for complete free validation; the quick subset is still only a feedback lane. When landing a PR, a changed target requires fresh readiness and approval. A staging check after merge no longer implies production is held, and a healthy old page does not prove the new revision deployed. Run your checks, then use `/land-and-deploy` to review the evidence before merging.
+
+### Itemized changes
+
+#### Changed
+
+- Local free-test workers follow available CPU affinity, with a minimum of one and the existing maximum of six. Explicit worker overrides and the separate CI matrix retain their behavior; Windows CI explicitly keeps its two-worker budget.
+- Deployment reports distinguish deployment status, production health, staging verification and completed rollback. Requests to stage before production stop before merge with a handoff to the configured pipeline.
+
+#### Fixed
+
+- Browser-consent checks distinguish a promised new consent question from an immediate drive offer, while still rejecting conditional drive permission before Aside is ready.
+- Review fixtures accept explicit no-change answers and coverage-reporting statements without authorizing source edits or index-flag changes.
+- Merge fallback requires authoritative confirmation that neither an auto-merge request nor a queue entry exists. Confirmed merges are never replayed, and changed heads or destination branches invalidate earlier approval.
+- Rollback distinguishes true merge commits, squash merges and rebase ranges. Failed or unverified deployment and canary checks remain visible rather than becoming success labels.
+
+#### For contributors
+
+- Repository release guidance defaults to autonomous patch bumps, including queue collisions. Merge approval remains separate.
+- Synthetic terminals signal readiness; publication tests advance a scoped clock through the original polling sequence; watchdog scenarios share compilation but retain isolated executables and state.
+- Free-only dependency exemptions are explicit, mapped dependencies take precedence, and unknown changes retain conservative paid selection. The portfolio document assigns separate responsibilities to structural tests, quality judges, native behaviors, simulations and platform integrations.
+- Native question, shared-code review and design-detector fixtures validate their actual supported interactions and executed evidence. Source-detector assertion failures are recorded after validation, with attempt-specific diagnostics retained beyond cleanup.
+
+## [1.90.0.0] - 2026-09-24
+
+Cookie imports now keep the chosen browser, profile, and destination explicit, show partial failures, and distinguish copying cookies from proving that you are signed in.
+
+### Added
+- macOS Dia discovery and profile selection, using the existing Chromium cookie reader. Live native Dia import remains unqualified; fixture coverage is not a claim of native compatibility.
+- Optional sign-in verification against an exact, visible identity assertion on the selected destination, with separate copied and verified results.
+- Explicit current-origin storage recovery. Storage is preserved by default; an opted-in reset clears that origin's localStorage and only the target tab's sessionStorage.
+
+### Fixed
+- Prefer renamed profiles from Local State, distinguish duplicate names, and require selection rather than guessing among plausible accounts. Bare and dotted domain selections now match the intended cookie scope without broadening it.
+- Register picker imports with the browser's imported-domain security guard, reject cross-origin picker mutations, and bind asynchronous operations to their original destination. Opening another picker makes old windows fail closed instead of silently changing their target.
+- Show complete, partial, zero, and failed imports accurately. Stale discovery responses and duplicate submissions no longer overwrite the current picker state.
+- Bound credential subprocess output and cleanup, retry only transient database reads, and prevent automatic replay of cookie-import mutations. The Node server uses a real read-only SQLite adapter.
+
+### Changed
+- Picker handoff codes last five minutes and remain single-use. Browser guidance explains profile selection, storage-reset consent, and the difference between copied cookies and verified sign-in.
+- Native Windows extraction uses a sandboxed, owned-process, pipe-only path with bounded cleanup and no TCP fallback. Its qualification allowlist is empty in this release, so encrypted-cookie extraction through this path stays disabled with manual-sign-in guidance.
+- Added isolated platform qualification, launch diagnostics, and regression coverage. Native Dia and protected default-profile Windows qualification remain incomplete; diagnostic passes do not count as successful imports.
+
+## [1.89.1.0] - 2026-09-24
+
+### Removed
+
+- **Continuous checkpoint commits.** Skills no longer ask users to enable automatic `WIP:` commits or instruct agents to create them. The checkpoint mode and push settings are no longer advertised or consumed, and existing saved settings are left untouched.
+- **Checkpoint-specific shipping cleanup.** `/ship` no longer exports checkpoint context or rewrites WIP history. It keeps its normal bisectable commit workflow and proceeds directly to verification when changes are already committed. Explicit `/context-save` and `/context-restore` remain available.
+
+### Fixed
+
+- **Native DevEx evaluation replies.** The test driver recognizes the editor hint shown when Claude Code focuses a custom answer, while still checking the exact question and reply before submitting.
+- **Shared-code review evaluation replies.** The no-change driver can use an explicit preservation description to interpret a shorthand label, while still rejecting mixed fix/skip choices and ambiguous answers.
+- **Windows timeout test readiness.** The process-cleanup regression waits for a live descendant before firing its registered deadline, while a separate real-clock case keeps startup bounded.
+- **Design consultation workflow.** Font and design rules now precede proposal drafting and independent input. Optional-browser routing, existing-system choices, preview feedback and command/session requirements are explicit, and token extraction cannot write the project's design file before approval.
+- **Shipping and engineering-review gates.** Missing dispatched reviewers now have an explicit stop/resume path, late shipping fixes return through fresh review, and evidence recovery distinguishes stale inputs from an unavailable ledger. Engineering review separates scope assessment, selector answers and remedy decisions, with ordered preparation and recovery.
+
+## [1.89.0.0] - 2026-09-24
+
+**Find shared code worth keeping.**
+**Get the evidence before you extract it.**
+
+`/deslop-shared-libs` finds places where sharing code could remove duplication and prevent repeated fixes. It starts with the preceding 14 UTC days of commits and PRs, plus relevant work on your branch, then follows the callers and helpers behind promising candidates. Each recommendation names compatible source locations, a small helper, the tests needed, and estimated savings after integration work. The skill recommends changes and stops; it does not edit your project or create issues or PRs.
+
+### The three numbers that matter
+
+Source: the workflow contracts in `deslop-shared-libs/SKILL.md.tmpl`, `plan-eng-review/sections/review-sections.md.tmpl`, and `review/SKILL.md.tmpl`, plus the generated catalog census. Run `bun test test/shared-libs-rendering.test.ts test/catalog-budget.test.ts` to verify distribution and catalog size. These are feature and source-size counts against v1.87.5.0, not performance measurements.
+
+| Metric | Before | After | Δ |
+|---|---:|---:|---:|
+| Dedicated recent-work shared-code audit skills | 0 | 1 | +1 |
+| Parent reviews using the shared-code rubric | 0 | 2 | +2 |
+| Generated catalog name and description bytes | 4,593 | 4,675 | +82 |
+
+`/plan-eng-review` and `/review` now apply the same criteria within the plan or diff you are already reviewing. They check existing helpers, caller compatibility, tests, and the risk of sharing a bug. They do not run the broader history audit.
+
+### What this means for developers
+
+You get up to five supported opportunities and up to three recommendations, with PR-covered work separated and missing evidence disclosed. Optional extractions require approval and do not lower the review score or block a clean result. A skipped extraction is reused only when its identity, branch, and verified source snapshot still match; actual defects keep normal fix handling. Run `/deslop-shared-libs`, or name a narrower area and time window.
+
+### Itemized changes
+
+#### Added
+
+- **`/deslop-shared-libs` recommends useful shared-code extractions.** Reports link authored callers, prefer existing helpers, account for tests and integration, and explain reliability gains and risks. Generated and third-party copies do not count toward savings. Fewer recommendations, including none, are valid.
+- **Recent work includes PR overlap checks.** The audit distinguishes code changes from comment activity, checks relevant older open PRs within a bounded scan, charges repeated page requests against the limit, and reports inaccessible history or truncated coverage. API reads never create response files, including temporary files outside the project.
+
+#### Changed
+
+- **Engineering plans and code reviews share one extraction rubric.** `/plan-eng-review` can evaluate proposed callers with labeled assumptions. `/review` checks actual changed code and related callers even for small diffs and Codex installations without Review Army.
+- **Extraction advice stays separate from defects.** Advice requires approval, survives review persistence with its source evidence, and cannot suppress a real defect. Reusing a previous skip requires matching structural identity, verified source coverage, and branch binding.
+- **Decision briefs retain their headings and closing tradeoff in native question tools.** The question carries its pros-and-cons heading and final summary; options retain their own benefits and drawbacks.
+
+#### For contributors
+
+- Added generated-host, discovery, identity, fixture, source-binding, and behavioral coverage. Gate evaluations exercise read-only access and the review action/persistence lifecycle; periodic evaluations cover ranking, PR overlap, and live Codex behavior.
+- Coverage evaluations now recognize complete combined source reads and explicit diagram legends while retaining checks for source ownership, missing output, and contradictory evidence.
+- First-question evaluations capture public native questions with a restricted tool set. Mode selection uses the actual question-tool callback and stops without answering. Provider failures and stale output remain failures. Interactive captures survive fixture cleanup when an output directory is configured, including local runs without a named run ID.
+
+## [1.88.1.0] - 2026-09-22
+
+Credential masking follows the exact detected source, and pre-push scans follow the actual destination. Browser agents and CSO operations retain precise ownership, while settings updates and artifact reinitialization preserve user-owned data.
+
+### Fixed
+- Credential masking uses original spans mapped from normalized matches, so anchored assignments, repeated values, Unicode and entity input redact the flagged value without masking a later neighbor. Sanitizable CSO source stays readable as masked text; unmaskable payloads remain withheld.
+- Pre-push scans bind their ranges to the destination's name and effective URL, including separate push URLs. Missing advertised objects use a conservative range, SHA-256 repositories get the correct empty tree, and bounded slices retain normalized proximity context without fabricating line anchors or duplicate findings. Unscannable long lines or context windows still block explicitly.
+- Hermetic evaluation children reject credential-shaped variables admitted through broad CI prefixes, while preserving CI metadata, named provider authentication and explicit runner overrides.
+- Browser agents belong to the persistent daemon and an exact process generation. Replacement requires confirmed exit, failed startup retains uncertain children, and publication and shutdown share a lock so older generations cannot delete a successor's discoverability files. Repeated failed respawns are bounded. Uncertain ownership and abandoned publication locks require manual recovery rather than a process sweep.
+- CSO lease recovery preserves 64-bit filesystem identities and nanosecond timestamps instead of rounding them. Adjacent identities remain distinct, replaced files remain protected, and ambiguous legacy state is still refused.
+- Settings mutations, backups and rollback resolve the selected symlink target and share its canonical lock. Links, private file modes and unrelated settings survive; changed or invalid targets are refused.
+- Artifact reinitialization updates managed allowlist entries while retaining the user suffix byte-for-byte, including comments and a missing final newline. Ambiguous markers and failed reads or assembly leave the original allowlist intact.
+
+### Changed
+- Required native macOS checks cover agent lifecycle, concurrent shutdown and linked settings. The native Windows CSO suite exercises repeated commands and exact high-ID lease recovery on NTFS.
+
+## [1.87.6.0] - 2026-09-18
+
+**Review gates keep their proof.**
+**Coverage audits read the code first.**
+
+Plan reviews now keep decisions, report checks, and publication checks in order when permissions, stale choices, or host metadata writes fail. Coverage audits for `/review`, `/ship`, and plan reviews read concrete source and test files before drawing their diagrams, so gaps are tied to code paths instead of diff and config noise.
+
+Generation now validates every host and expected artifact, and Codex evaluation records retain failed execution and assertions. Plan reviews carry approved decisions through scope changes and save complete reports before declaring completion. CEO and engineering reviews save and verify each question before asking it; Autoplan reads and verifies the current plan, then publishes the parent phase report before advancing.
+
+### Fixed
+- PR evaluation plans keep a small changed-behavior profile and selected quality judges, while weekly and manual runs retain fresh broad coverage. Deferred checks remain visible. Verified workflow-judge passes can be reused within the same PR for 24 hours only when their complete inputs and runtime match.
+- Free tests use a refreshed timing inventory and balanced isolated CI runners. `test:quick` provides an explicit partial feedback run; the complete suite remains required. Collection fixtures wait for actual readiness instead of repeating fixed startup delays. Recovered retries retain their original failure logs. Windows fixtures handle native paths and give independent scenarios separate deadlines; prepared Git fixtures disable background maintenance before copying.
+- `/plan-ceo-review` and `/plan-eng-review` preserve scoped decisions, required save/read-back checks, and report publication before declaring completion or advancing to the next section.
+- Coverage audits read source and test files in a dedicated step before mapping `[OK]` and `[GAP]` rows, while keeping framework and config context separate.
+- `/plan-eng-review` clarifies setup gates, targeted audit timing, report ordering, and Outside Voice output surfaces without losing saved-question verification.
+- The plan-count timeout fixture closes stdin without forcing process exit before diagnostics can be captured.
+- Ship host golden files and parity size guards match the generated Codex, Factory, and plan-review outputs.
+- Skill generation awaits every artifact across all hosts. Freshness checks detect missing output, validate generated content, preserve files and directories during dry runs, and report generation errors instead of accepting partial output.
+- Codex evaluation records follow the runner result and assertions. Timeouts, failed validations, inherited output pipes, and interrupted attempts retain their actual outcomes, captured usage, and bounded cleanup.
+- Paid test supervision allows each file to finish its existing cases and configured retries. CI and detached-run limits cover the full schedule without increasing model work budgets.
+- `gstack-decision-log --help` explains the accepted payload and safe shell quoting without creating state.
+- Plan reviews preserve the selected mode and prior approvals, compare each option against independent changes, and verify complete reports before recording completion. Engineering reviews assign independent decisions before drafting options, then audit and save the complete question before presenting it. Accepted scope includes the full selected option and its conditions; conflicting wording requires a corrected question and another answer. DX reviews use the same onboarding milestone for benchmarks, targets, examples, and measurement, and carry required factual verification forward without unnecessary approval questions. Outside-review suggestions use explicit approval menus; a dependency conflict returns to the affected decision before the plan is declared ready.
+- `/plan-ceo-review` follows ordered phases and carries every existing approval through scope changes, including reviews with no new approach choice. It saves the complete question, option facts, and source references, then verifies the actual outgoing question against those saved fields and sends it unchanged. It applies file permissions consistently to plans, reports, tasks, and review metadata. When writes are forbidden, it carries complete review inputs in chat and labels them not persisted. A failed save stops completion. Unavailable reviewers and missing scores remain unavailable instead of inheriting a prior score.
+- Design skills save mockups, previews, and approved designs under the configured state directory, and later steps discover them there. CEO plan discovery also follows the configured state directory in design input detection and prior-plan context.
+- `/autoplan` loads each review's complete instructions, waits for asynchronous reviewers, and sends the current amended plan to spec reviewers. Each phase reloads its closing steps and verifies the full current plan before announcing completion; amendment checkpoints stay separate from reviewer inputs. Native review drivers acknowledge current questions and permissions promptly, reject stale frames and late completions, and recognize the offered manual handoff.
+- `/office-hours` preserves structured review evidence through completion, keeps supported handoff content when replacing review sections, and develops distinct builder ideas. `/setup-gbrain` handles fresh state, remote-only sharing declines, and interrupted attempts without leaking fixture state.
+- Terminal sessions drain output before reporting completion. Browser shutdown cleans up only the configured server instance. Pairing fixtures use checked ports and bounded cleanup. Deprecated-flag scans exclude workspace caches before searching and propagate command and filesystem failures.
+- CSO public reports redact repository roots regardless of their path, while private snapshots retain the identity needed for verification. CSO also rejects a remote Docker endpoint with the correct diagnostic even when Docker is not installed.
+
+### Changed
+- CEO, engineering and Autoplan instructions fit their existing prompt-size limits while retaining approval, saved-question verification and report-publication requirements. Engineering uses one section-loading step and one approval check, with explicit rules for independent choices and unchanged question payloads.
+- Review fixtures provide the application context and independent contracts their assertions require, declare supported editing and feedback interfaces, and verify existing rollback behavior. The DX count scenario covers a bounded onboarding decision checkpoint and defers independent roadmap work. Design evaluations submit real board feedback before acknowledging it and grant image reads only inside their owned artifact directory. Sol evaluations generate skills in private storage without replacing checkout caches. Native fixtures match complete permission text and offered handoff choices. Shared helper and source-template dependencies select the affected evaluations; overlay tests distinguish correctness from performance measurements.
+- Contributor instructions require focused reproductions and adjacent checks before paid evaluations, independent scheduling, launcher preflight with executed-case counts, reuse of passing checks with unchanged inputs, and one full free-suite acceptance run after the code is frozen. Recurring parser failures require checking the supported input class against the pinned runtime.
+
+## [1.87.5.0] - 2026-09-17
+
+**Tests finish sooner without dropping checks.**
+**CI stops waiting on unused tooling.**
+
+This release speeds up gstack's development feedback loop. Terminal-driven checks react to new output instead of waiting through a fixed polling interval. Synthetic CLIs can announce when their input handlers are ready, while real CLI sessions retain their startup grace and input debounces. Completed processes no longer stay alive just to finish unused timeout timers.
+
+### The three numbers that matter
+
+Measured on the same Linux machine with Bun 1.4.0. Run each named file with `bun test <file>` on the previous release and this version. The polyfill and daemon numbers are three-run wall-time medians on both sides; the permission baseline is one observed run, and its after value is a three-run median. These are individual test-file measurements, not whole-suite or production latency claims.
+
+| Test file | Before | After | Δ |
+|---|---:|---:|---:|
+| `browse/test/bun-polyfill.test.ts` | 17.30s | 1.29s | −93% |
+| `design/test/daemon-discovery.test.ts` | 17.78s | 11.99s | −33% |
+| `test/plan-count-file-permission.test.ts` | 97.05s | 30.92s | −68% |
+
+The permission suite still makes all 115 assertions, including its deliberate stale-prompt delay. Terminal observations are capped at four per second so animated output cannot turn faster responses into a busy loop.
+
+### What this means for contributors
+
+Local test runs spend less time waiting after work is already complete. CI planning no longer pulls the execution image or waits for image lookup before producing its manifest; executors still require both prerequisites, and missing or failed results still fail reconciliation. Run `bun run test` for the complete free suite.
+
+### Itemized changes
+
+#### For contributors
+
+- Wake plan-count checks on output and exit, retain a silent metadata fallback, and settle output bursts before reading split redraws. Three synthetic CLI suites use explicit startup readiness without changing real-CLI startup behavior.
+- Cancel unused PTY and Node deadlines, stop already-exited daemon fixtures immediately, clear cookie-picker fixture sessions between suites, and await watchdog shutdown with a bounded completion signal.
+- Await telemetry append completion in consent tests instead of assuming disk writes finish within 30ms. Consent checks and error swallowing are unchanged.
+- Run gate and periodic CI planners directly on pinned Bun without dependency installation. Reports also skip unused installs; fork restrictions, executor images, and failure checks remain intact.
+- Retain failed eval shard logs from the hidden CI cache directory without uploading unrelated cache files.
+- Inject the CSO Git-pointer race at its first bounded read, preserving the original rejection assertion.
+- Preload the UI-positive design-review eval in an isolated plan fixture and require an answered native design question, rather than accepting scope or outside-review menus. Bind command-rejection checks to the invoked skill, not a child tool's diagnostics.
+- Generate skill documentation in a fresh checkout without importing browser runtime dependencies. Keep snapshot flag metadata and public exports unchanged.
+- Eliminate early-reader pipe races in artifact URL normalization and safety-hook matching. Multiline commands retain their warnings even with large trailing content.
+- Treat a publication removed by another CSO recovery helper during candidate enumeration as a bounded retry; replacement inodes still fail closed.
+
+## [1.87.4.0] - 2026-09-16
+
+**Failed checks stay failed.**
+**Health scores show what actually ran.**
+
+`/health` now keeps each checker's exit status and counts diagnostics from its complete output. Reports still show only the final 50 log lines. Scores name the checked and unavailable categories, so a partial run carries its coverage beside the number. Runs with no checks produce no numeric score or history entry.
+
+### The three numbers that matter
+
+Source: the synthetic checker in `test/health-capture.test.ts`, which emits 60 type errors followed by 80 context lines and exits 2. These measurements compare the v1.87.3.0 capture example with this version under default Bash without `pipefail`. Run `bun test test/health-capture.test.ts` to verify current behavior. These are correctness measurements, not production statistics.
+
+| Metric | Before | After | Δ |
+|---|---:|---:|---:|
+| Reported checker exit status | 0 | 2 | +2 |
+| Type errors available for scoring | 0 | 60 | +60 |
+| Displayed checker log lines | 50 | 50 | 0 |
+
+The failing checker no longer looks successful because `tail` succeeded. All 60 errors count even when the displayed tail contains only context.
+
+### What this means for developers
+
+You can distinguish a score backed by several checks from one based on a single available tool. Empty runs report `N/A — no checks ran`; capture errors also remain unscored and leave existing history unchanged. Trends compare only matching categories, so installing a new checker does not manufacture a regression or improvement. Run `/health` to see the score and its coverage together.
+
+### Itemized changes
+
+#### Fixed
+
+- **`/health` preserves failed checks and complete diagnostic counts.** Reports show the final 50 output lines while scoring the full log and the checker's actual exit status. Temporary capture errors remain explicit errors.
+- **Health scores disclose coverage.** Partial runs list checked and unavailable categories. Runs with no checks report `N/A — no checks ran`, leave numeric history unchanged, and have no trend. Score comparisons require matching categories.
+
+#### Changed
+
+- Routing evaluations choose among installed GStack skills, keeping built-in CLI skills outside the evaluated catalog. The model still chooses by matching the request to each skill's description.
+
+## [1.87.3.0] - 2026-09-15
+
+**Changed code needs another pass.**
+**Review freshness now checks both ends.**
+
+A green review now stays attached to the code that was there when the pass began. `/review` and `/ship` capture that content before reading it, then compare again when the pass finishes. If fixes changed the files, another pass has to review those fixes before the dashboard can call the result CURRENT. Older log-only records remain visible, but cannot stand in for a completed code review.
+
+A clean result requires a completed pass on unchanged content with no unresolved findings. A stopped or nonconverged run cannot clear the code-review row just because its commit has not moved.
+
+### The three numbers that matter
+
+Source: scenarios in `test/review-start-evidence.test.ts`, checked against released v1.87.0.0 and this version. Run `bun test test/review-start-evidence.test.ts` to verify current behavior. These are false CURRENT grades across five deterministic cases, not production incident estimates.
+
+| Cases incorrectly graded CURRENT | Before | After | Δ |
+|---|---:|---:|---:|
+| Mid-review edits: tracked and untracked source | 2 | 0 | -2 |
+| Log-only result without a captured review start | 1 | 0 | -1 |
+| Codex advisory findings: none or only some resolved | 2 | 0 | -2 |
+
+The old stamp could certify a review after its own fixes changed the tree. Those cases now stay STALE or UNVERIFIED, including an advisory-only Codex pass that leaves findings unresolved.
+
+### What this means for developers
+
+You can distinguish a completed, unchanged pass from a run that still needs attention before merging. Plan reviews keep their existing rules; they assess the plan rather than the checked-out source. Completion is still reviewer-reported, not proof that an LLM read every file. Run `/review` again after fixes and use the new result when preparing to ship.
+
+### Itemized changes
+
+#### Fixed
+
+- **Review freshness no longer certifies unreviewed fixes.** `/review` and `/ship` bind each diff pass to the content captured before it starts. Edits during review, incomplete passes, and older log-only records stay stale or unverified in the readiness dashboard and `/land-and-deploy`, even when HEAD has not moved. Plan-review evidence keeps its existing freshness rules.
+- **Codex readiness keeps unresolved findings visible.** Passing the critical-findings gate does not make a review CURRENT while advisory findings remain open. The gate's severity policy is unchanged.
+
+## [1.87.2.0] - 2026-09-15
+
+**Headless commands stop closing your logged-in browser.**
+**Other projects leave it alone.**
+
+Keep a headed GStack Browser open while another project uses headless browse commands. Starting, stopping, or disconnecting that project's headless daemon no longer kills the process holding your headed profile or removes its locks. The shared-profile cleanup now runs only for headed sessions, which actually use that profile. Headed startup keeps its stale-lock recovery.
+
+### The three numbers that matter
+
+Source: `bun test browse/test/chromium-profile-isolation.test.ts`, running the same nine-case regression suite against unchanged main and this release. Its headless CLI cases pair a real daemon with a controlled live process holding another project's profile locks. The headed startup controls use a stub daemon.
+
+| Metric | Before | After | Δ |
+|---|---|---|---|
+| Isolation suite cases passing | 3 of 9 | 9 of 9 | +6 |
+| Isolation suite cases failing | 6 of 9 | 0 of 9 | -6 |
+| Headed startup controls passing | 2 of 2 | 2 of 2 | Unchanged |
+
+The six previously failing cases now pass without deleting the foreign locks or killing their holder. Both explicit `--headed` and `BROWSE_HEADED=1` still clear stale locks before launch.
+
+This release separates headless cleanup from the shared headed profile. It does not give two headed sessions separate profiles, and it does not fix production Chromium process-identity capture. Tests that supply a recorded process identity verify its cleanup behavior; they are not evidence that a real launch records that identity.
+
+### What this means for multi-project work
+
+You can leave one browser open for work that needs your logins while another project starts or stops its own headless daemon. That removes the cross-project cleanup path behind the disappearing-window report, without claiming a solution for two headed browsers sharing one profile. Upgrade gstack and keep using your existing headed connection.
+
+### Itemized changes
+
+#### Fixed
+
+- Headless daemon startup, stop, disconnect, and crash cleanup leave another project's headed browser and shared profile locks alone. Headed launches retain stale-lock cleanup. (#2817)
+
+#### For contributors
+
+- Added nine regression cases for shared-profile isolation, including cleanup with a supplied recorded process identity. Production identity capture is not validated by those fixtures.
+- Extended only the outer deadline of the native Windows USERPROFILE integration test to 120 seconds. Its assertions and subprocess timeouts are unchanged.
+
+## [1.87.1.0] - 2026-09-15
+
+**Two vulnerable dependencies are fixed.**
+**Archive extraction keeps its boundary.**
+
+Sharp now resolves to 0.35.4, replacing the vulnerable libheif bundle, and adm-zip resolves to 0.6.1, which rejects extraction through destination symlinks. Both packages arrive through transitive dependencies, so the override changes also update the resolved lockfile and Sharp's platform packages. A normal archive still extracts, and the screenshot downscaler still reads and resizes PNGs. The fix does not change the pinned evaluation harness or add a vulnerability exception. This takes the dependency update from #2867 without bundling its separate override-expiry and scheduled-notification proposals into the security patch.
+
+### The three numbers that matter
+
+These results come from OSV-Scanner 2.3.8 with the existing `.osv-scanner.toml`, and `bun test test/dependency-security.test.ts` against the original and updated lockfiles.
+
+| Check | Before | After | Δ |
+|---|---:|---:|---:|
+| Unsuppressed OSV findings | 2 | 0 | -2 |
+| Security regression checks passing | 1/6 | 6/6 | +5 |
+| Destination-symlink escape cases rejected | 0/2 | 2/2 | +2 |
+
+The two escape cases cover a symlinked file and a symlinked directory. Both now refuse the write and leave the file outside the extraction directory unchanged. The scanner's existing exceptions remain in place; zero unsuppressed findings is not a claim that every dependency is vulnerability-free.
+
+### What this means for users
+
+The installed dependency tree no longer carries these two known-vulnerable versions. The screenshot path continues to handle PNGs, while archive extraction gains the upstream boundary check without a new configuration switch. Upgrade, then run `bun install --frozen-lockfile` to install the fixed dependency set.
+
+### Itemized changes
+
+#### Security
+- Upgrade the `sharp` override to 0.35.4 and `adm-zip` to 0.6.1, including the resolved Sharp platform packages. Addresses #2866. Contributed by @smsmatt in #2867.
+- Add regression coverage for fixed version floors, the loaded Sharp runtime, ordinary archive extraction, and file/directory destination symlink rejection.
+
+## [1.87.0.0] - 2026-09-11
+
+**`/cso` now distinguishes verified vulnerabilities from hypotheses and coverage gaps, and qualified comprehensive audits can produce replayable repair bundles without changing your working branch.**
+
+### Added
+- `/cso --doctor`, `--resume`, `--replay`, and `--recheck` diagnose prerequisites, recover interrupted work, repeat recorded verification, and establish closure from a fresh snapshot. `--base`, `--budget`, and `--offline` make scope, time, and network policy explicit.
+- A native `gstack-cso` helper captures tracked changes and nonignored source without Git hooks or staging, rejects unsafe files and changing inputs, redacts output before storage, enforces run budgets, and retains recoverable reports and bundles under the private gstack state root.
+- Comprehensive audits have declared preparation paths for Node, Bun, Python, and Rails, with SQLite and disposable PostgreSQL support. Dependency acquisition is separated from offline application execution, and target code runs only through the constrained local Docker policy.
+- Runtime-tested repair bundles record the original reproduction, an authenticated out-of-process security assertion, legitimate controls, the patch, dependency and configuration closures, provenance, and input hashes. Project-test completion remains `self_reported`; the stronger `tested` label is reserved for a future target-independent completion witness. Replay requires matching source; current-source rechecks collect new evidence instead of inheriting old status.
+- Scanner adapters normalize Gitleaks, OSV-Scanner, Semgrep, zizmor, Trivy, Schemathesis, and imported SARIF as candidate evidence with version, scope, freshness, exclusions, and failure records.
+- Protected release workflows, 40 vulnerable/fixed evaluation pairs across the four supported stacks, fault-injection tests, and runtime/scanner promotion gates qualify catalogs before comprehensive target execution is enabled.
+
+### Changed
+- Daily `/cso` audits remain bounded and static. Reports begin with `complete`, `partial`, or `not assessed`, publish supported findings as they become available, separate severity from confidence and evidence, and say exactly which security work was left undone.
+- Security judgment now models actors, assets, entrypoints, tenant boundaries, sensitive operations, and invariants; challenges each candidate against callers and controls; and evaluates development dependencies, availability, historical secrets, role-controlled input, and gstack-owned skills by attacker control and impact.
+- Setup builds the trusted launcher only when Bun supports all required no-autoload flags and the native toolchain is available. Unsupported hosts retain the rest of gstack and receive a precise `/cso` prerequisite instead of a partially trusted helper.
+- Legacy v2 reports remain readable as historical review evidence. They never inherit v3 reproduced, repair-tested, or current-source closure status.
+- The authenticated repository owner account `@garrytan` is exempt from the PR liveness screenshot; all other contributors still provide live `GSTACK PR` proof.
+
+### Security
+- Runtime startup strips injection variables, binds absolute executables and allowlisted environments, rejects remote Docker contexts, and uses pinned images, non-root containers, dropped capabilities, read-only roots, bounded writable storage and output, no published ports, and network-isolated reproduction groups.
+- Runtime and scanner catalogs ship unpromoted until protected native Docker qualification succeeds. On an unqualified installation, `/cso --doctor` reports the missing qualification and comprehensive target execution fails closed; static assessment remains available.
+
+## [1.86.0.0] - 2026-09-11
+
+### Added
+
+- **Get an independent Claude Code review from Codex.** Planning, review, shipping, design, documentation, and spec workflows select their outside reviewer from the running harness. Codex calls Claude Code; Claude Code calls Codex. Other supported harnesses expose both review skills.
+- **Review, challenge, or consult with `/claude-code`.** Reviews use only the context supplied by the parent. Consultations can read repository files and resume the previous conversation, using your configured Claude authentication and model.
+
+### Changed
+
+- **`/claude` is now `/claude-code`.** Run setup to migrate existing installations, including shared and copied installs. Each wrapper is available outside its own harness, and Kiro receives its native skills. Successful migration removes the old name without an alias; failed repairs preserve the working entry and user files.
+- **See which outside reviews actually completed.** Reports retain the provider and phase for each pass, including partial `/autoplan` coverage. Disabled, skipped, unavailable, and completed reviews stay distinct; historical records keep their original attribution.
+
+### Fixed
+
+- Failed, refused, empty, or malformed outside reviews can no longer count as a clean pass. Claude runner failures include authentication, timeout, and output overflow diagnoses, and stale skills stop before invoking their own harness.
+- Spec review stops when redaction fails, before sending the spec to a reviewer or saving it downstream.
+- Generated skills preserve their source files when an output directory links back into the installation, including on Windows.
+- Planning reviews request each unresolved decision before editing and carry approved remedies across sections without asking again. Choosing a scope or approach does not approve every finding. Reviews preserve stated requirements unless you authorize changing them.
+- Autoplan preserves the original plan and checks that each phase’s recorded requirements reach the next reviewer. It reconciles approvals with that record, reads the review skills installed for the current harness, and waits for reviewers and verified plan updates before advancing. Disabling extra plan or documentation review also skips replacement reviewers.
+
+## [1.84.1.0] - 2026-09-09
+
+### Changed
+- Codex reviews, consultations, and evals now default to GPT-6 Astra. Choose another model with `GSTACK_CODEX_MODEL` or an explicit model in your request; the readiness probe checks that same selection.
+- Claude outside voices and eval capture/judging now default to Fable 5.1. Outside voices accept `GSTACK_CLAUDE_MODEL`; evals retain their explicit and environment model overrides. Warmup and distillation keep their cheaper defaults.
+
+### Fixed
+- Native Codex reviews honor the selected model even when the CLI has a separate review-model pin. Claude judges parse text after thinking blocks, and arm judgments omit the temperature setting Fable does not support.
+- Frontier judges have enough output budget for thinking and JSON. Workflow evals read generated sections in execution order, without duplicated content.
+- Ship and plan reviews keep approval gates with the parent agent, preserve readiness checks, and use project-native test commands. QA scoring and monitoring rules are explicit; Aside drive options wait for a successful readiness probe.
+- Benchmark timing uses the navigation entry's actual fields. Deploy setup collects missing configuration, and failed vendored upgrades restore their backup instead of deleting it.
+- Retro reports distinguish verified merges from PR references, use the session date for snapshots, and define report ordering. The quality eval includes compare-mode instructions instead of cutting them off.
+- Documentation review runs before publication so approved fixes reach the PR. Changelog protection, unavailable-review handling, and raw/enveloped PR-body handling are consistent across the workflow.
+
+## [1.84.0.0] - 2026-09-09
+
+**gstack's design skills now start with 61 deterministic anti-pattern checks, in your voice, then spend their judgment where a detector cannot.**
+**DESIGN.md is written in the open format that impeccable and Google Stitch read, and the AI-slop list lives in one typed catalog instead of four drifting copies.**
+
+If you have [impeccable](https://impeccable.style) installed, `/design-review`, `/design-html`, `/review`, and `/ship` run its engine first and hand you its findings as `FINDING-NNN [rule-id]` rows with file:line and a handoff (`/impeccable typeset`, `layout`, `colorize`, ...) before the LLM pass reads a page. gstack never runs impeccable's installer or launcher. The first time a design skill finds no engine it asks once: download the 16 MB engine binary from impeccable's own GitHub release into `~/.impeccable`, checked against a checksum gstack pins and recorded in your egress ledger first, or not. Say no and nothing changes and nothing nags; `gstack-config set design_detector off` silences every trace. The probe only reads files, the engine runs only from under your home directory, and a checked-out repository can never make gstack execute one of its own files.
+
+On a live URL, `/design-review` scans the rendered page: the DOM is dumped with linked stylesheets inlined and scripts, input values, handlers, and query strings stripped, redaction-checked, kept owner-only, and the engine reads that, so Rule 4 holds on a deployed site. `/design-consultation` writes the open DESIGN.md spec (tokens in front matter, eight canonical sections, your Motion and Decisions Log kept). An existing file is converted only when you say so, once, and the answer is recorded in the file.
+
+### The numbers that matter
+
+Source: `git diff origin/main --shortstat`, `lib/design-catalog.ts` (`bun -e` over the exports), the free-suite log recorded by `gstack-evidence`, and the paid E2E rerun on this branch (`test/skill-e2e-design.test.ts`, `test/skill-e2e-review.test.ts`, 12 cases).
+
+| Metric | Before | After | Δ |
+|---|---|---|---|
+| Deterministic checks in a design review | 0 | 61 rules (impeccable's engine, one consented download away) | evidence before judgment |
+| Places the AI-slop vocabulary lived | 4 files, drifting | 1 typed catalog, 86 entries (57 slop, 29 quality) | `review/design-checklist.md` is generated from it |
+| Skills that run the detector | 0 | 4 (`/design-review`, `/design-html`, `/review`, `/ship`) | same rule ids everywhere |
+| What a scan can read | source files | source files or the rendered DOM of a live URL | works on deployed sites |
+| DESIGN.md format gstack writes | private schema | open DESIGN.md spec | impeccable and Stitch read it |
+| New `test()` declarations (platform-gated ones included) | | 194 across 11 files | free suite: 9,206 tests, 12/12 paid E2E |
+
+The row you feel is the first one: a purple gradient, a kicker above a heading, a nested card, or `Inter` as the display face is a machine finding with a file:line before anyone forms an opinion, so the review's judgment goes to hierarchy, trust, and copy.
+
+What this means for anyone shipping a UI with gstack: say yes once when a design skill offers the engine (or install impeccable yourself), then run `/design-review` as before. The mechanical rows arrive first, tagged, deduplicated against the checklist, and calibrated against your DESIGN.md tokens. Never install it and every design skill behaves as in v1.81, with sharper doctrine.
+
+### Itemized changes
+
+#### Added
+- **Design detector** (`bin/gstack-design-detect.ts`, config key `design_detector: auto|off`): `probe` reports `IMPECCABLE_READY | NOT_CACHED | NOT_AVAILABLE | DISABLED` plus skill, hook, and config-ignore lines without executing anything; `scan` runs the user-installed engine over repository files, changed frontend files (`--changed <base>`, NUL-safe, batched), or DOM dumps under `~/.gstack/projects/<slug>/designs/`, and prints one normalized JSON document plus a fenced, untrusted `DETECT_TOP` block grouped by rule; `rules` lists the mapping. Only an install under HOME (cache, env override, PATH, or the skill's sibling engine) whose real file is named `impeccable` is ever READY; URLs are refused; the engine sees a minimal environment; per-batch and whole-scan timeouts; findings capped and every field sanitized; exit 3 marks a gstack bug.
+- **Consent-gated engine install** (`gstack-design-detect.ts install`): when the probe finds no engine, the design skills ask one question, once, in interactive sessions only (never in spawned or headless runs). Yes downloads the engine version gstack has tested for your platform from github.com/pbakaus/impeccable's releases, verifies it against the checksum pinned in gstack for all five platforms, writes an egress receipt before the fetch (fail-closed), and places the one file under `~/.impeccable/bin/<version>/`: no impeccable skill, no editor hook, no launcher. "Never ask again" is remembered in `design_detector_install_prompted`; "turn it off" is `design_detector off`. gstack never runs `npx impeccable`.
+- **Phase 0 in `/design-review`**: source mode on a feature branch, DOM mode on any URL (Aside first, the bundled browser otherwise) through one shared dump script, `lib/dom-dump.js`; `design-baseline.json` gains per-page detector counts with id-level deltas and an `engine changed` caveat; Phase 10 reports `Detector: N → M`; deferred findings end with the `/impeccable <cmd>` handoff when the skill is installed.
+- **`/review` and `/ship`** design pass: the mechanical scan runs first, its rows bucket by tier (auto-fix, ask, possible), and a detector hit at the same file:line as a checklist hit is one row. **`/design-html`**: a bounded slop gate before screenshots, one fix pass, then accepted-with-reason rows.
+- **Typed design catalog** (`lib/design-catalog.ts`): 86 entries with rule ids, impact, tier, confidence, detection method, handoff, fonts, and the ten `mockupNever` patterns the image-generation prompt now refuses by default. `review/design-checklist.md` is generated from it by `bun run gen:skill-docs`.
+- **Doctrine**: Persuade / Operate / Read / Experience modes (MARKETING and APP UI kept as aliases), craft-floor reflexes (browser surfaces, one authored motion moment, depth with an offset, tinted secondary text, more space above a heading than below, light or dark from the use scene), the three-looks calibration, a font procedure with a role-scoped overused list, and Restrained / Committed / Full palette / Drenched color strategies.
+- **Open DESIGN.md format** (`lib/design-md.ts`, `bin/gstack-design-md.ts`: `check`, `convert`, `tokens`, `mark`): read, write, convert a legacy gstack file (backup kept), flatten tokens for calibration, and persist the one-time format choice as a marker line. `/design-consultation`, `/design-review`, and `/design-html` write and read it; `PRODUCT.md` prefills the consultation's questions.
+- **Attribution**: `NOTICE.md`, `licenses/Apache-2.0.txt`, and changed-file headers for material derived from impeccable and the DESIGN.md specification.
+
+#### Changed
+- `/design-consultation` chooses type by a procedure (name the world, shortlist per role, strike the overused list for that role, verify availability, state loading), varies direction across generations without flipping light and dark, and lists banned faces (Courier New now among them) from the catalog.
+- Landing-page rules ask for one authored motion moment and a brand texture or asset instead of halo, spotlight, stripe, or grid gradients; the universal font rule is scoped to the display voice with body/UI exceptions on Operate and Read surfaces.
+- gstack's own `DESIGN.md` is in the open format, with its intentional exceptions (the live-feed pulse, 11px mono data labels) recorded in the Decisions Log.
+- The design binary's variant set trades its light/dark flip for a drenched-color dial.
+- Repository `.impeccable/config*.json` ignores are surfaced (`IMPECCABLE_IGNORED_RULES`, `_FILES`, `_VALUES`) and treated as evidence in `/review` and `/ship`, settled decisions in your own project.
+
+#### For contributors
+- Real engine captures pin the contract (`test/fixtures/impeccable-*.json`, the dumped slop page, captured with engine 0.1.3 and its 61-rule registry); `test/fixtures/fake-impeccable.ts` drives the unit and E2E suites through env knobs (output file, exit code, sleep, argv log) that pass the wrapper's minimal engine environment.
+- New free suites: `gstack-design-detect`, `design-md`, `design-catalog`, `design-checklist-sync`, `design-detect-contract`, `frontend-scope`, `impeccable-fixtures`, `dom-dump-hygiene` (a real Chromium run, CI or `GSTACK_DOM_DUMP_HYGIENE=1`), plus the brief test for the design binary. Gate E2E: `design-review-detector-shim` (source and DOM); periodic: `design-html-slop-gate`.
+- `design-review`'s eager ceiling moved to 31,319 tokens; the carve guards for `design-html` and `plan-design-review` are re-measured; the `bin/`-and-`lib/` linking rule now carries two more runtime bins.
+
+## [1.83.0.0] - 2026-09-09
+
+**Memorable's workflow memory plugs into Claude Code through gstack, behind a consent key you control.**
+**Every prompt it sees is receipted, secret-scanned and enveloped. The switch is off until you flip it.**
+
+Memorable (memorable.sh) is a third-party CLI that remembers how you did a task and recalls it the next time you ask for something similar. Its own installer registers a Claude Code hook directly. This release lets you register that hook through gstack instead, with `gstack-memorable enable`, and nothing changes until you run it. When you do, gstack records its own consent key (`memorable_recall`, listed by `gstack-egress grants` with its revoke command), writes an egress receipt before every prompt it hands to the vendor binary and skips the hand-off if the receipt cannot be written, refuses to hand over a prompt carrying a live-shaped credential, skips repositories whose trust policy is `deny` or `read-only`, runs the binary in an allowlisted environment inside its own process group under a 4.5 second budget, and wraps whatever comes back in the trust envelope so recalled text can never block a prompt or speak as gstack. `gstack-memorable status` shows the vendor CLI, the gate, who registered the hook (by identity, so it stays correct after Claude Code rewrites `settings.json`), receipt counts and recent errors. `disable` turns it off and verifies both the consent and the registration before it says so. Claude Code only; Windows is refused for now because there are no process groups to contain the vendor.
+
+The numbers that matter. Measured on a Linux sandbox with a fake vendor; the scan rows come from `scan()` in `lib/redact-engine.ts` on a synthetic log-like prompt dense in emails and IP addresses (256 KiB: 5,462 findings; 512 KiB: 10,898 findings), `main` against this release.
+
+| Metric | Before | After | Δ |
+|---|---|---|---|
+| Redaction scan, 256 KiB log-like prompt | 1,573 ms | 65 ms | 24x faster |
+| Redaction scan, 512 KiB log-like prompt | 6,182 ms | 126 ms | 49x faster |
+| Hook cost per prompt with the bridge disabled | no hook | 49 ms | shim, bun, one config read |
+| gstack work per prompt before the vendor runs | no hook | ~25 ms | gate, policy, scan, receipt |
+| Tests in the free suite covering this bridge and the hook manager | 0 | 128 | +128 |
+
+The scan speedup is not bridge-specific. Line and column for each finding used to be computed by walking the text from the start, so a pasted log full of addresses cost time quadratic in its matches; it is a binary search over a line index now, and every caller of the engine (`gstack-redact`, the pre-push hook, the PR-body scan in `/ship`) gets it.
+
+What this means for you: if you use Memorable, run `memorable login`, `memorable enable`, then `gstack-memorable enable`, and look at `gstack-egress list --sink memorable-recall` after a few prompts. If you do not, nothing changes: the key defaults to off, no hook is registered, `./setup` never registers one for you, and upgrading needs no migration. `docs/memorable-workflow-memory.md` says exactly what gstack hands over, what it can attest, and what is Memorable's own claim. Contributed by @AdvaiytSane and @NIkhil-cmd-cmd (#2831).
+
+### Itemized changes
+
+#### Added
+
+- **`bin/gstack-memorable enable | disable | status`**, the Memorable recall bridge (Claude Code only, off by default). `enable` needs the vendor CLI on the machine, registers gstack's hook at the stable install path with a 5 second timeout, refuses when Memorable's own installer already registered its hook (two entries would run the hook twice per prompt), verifies the stable install carries this bridge before touching anything, and sets `memorable_recall=on`. It never runs `memorable enable`: the vendor's capture consent is yours to grant. `disable` flips the key off first, removes gstack's entry by identity (tag or no tag), verifies both, and reports a partial failure as one. `status` never executes the vendor. One lifecycle transition runs at a time (a lock under `~/.gstack/locks`, stale after 30 seconds). Exit codes mirror the hook manager: 1 refused, 3 unparseable `settings.json`, 4 unexpected shape, 5 lock.
+- **`hosts/claude/hooks/memorable-user-prompt-hook`** (bash shim plus `memorable-user-prompt-hook.ts`), the UserPromptSubmit hook the bridge registers. One deadline clock undercuts Claude Code's 5 second hook kill; stdin is capped at 1 MiB; the prompt is scanned for HIGH-tier credential shapes on the raw bytes and on the decoded string values; the vendor sees only `PATH`, `HOME`, identity and locale variables, temp directories, the standard proxy, TLS and `XDG_*` variables and its own `MEMORABLE*` knobs; only a string `additionalContext` is accepted from it (a vendor `decision`, `continue` or `systemMessage` is dropped), control and Unicode format characters are stripped, the text is capped at 8 KiB on a UTF-8 boundary and enveloped. The vendor's whole process group is killed when the hook finishes, hangs past its budget, or is terminated by the host mid-flight (a process the vendor detaches into its own session is outside that guarantee); a vendor that exits but leaves a helper holding its pipes still gets its answer delivered. Every refusal is one rate-limited line in `~/.gstack/hook-errors.log` (created 0600); the hook always exits 0.
+- **`memorable_recall` config key** (`on | off`, default `off`, a typo is rejected and the prior value kept) and a **`memorable-recall` row in `gstack-egress grants`** naming the vendor CLI, the per-prompt receipt sink and the revoke command.
+- **Egress receipts for the `memorable-recall` sink**, fail-closed: no receipt, no hand-off. The receipt records the byte count and sha256 of the exact stdin handed over, the consent key, and `local:<path to the vendor executable>` as the recipient gstack can attest; the outcome records `exit:0 output-written bytes=N gstack_ms=N`, `exit:N injected=no`, `timeout`, `spawn-error:<code>` or `budget-exhausted`. A receipt with no outcome reads as unknown, never as success.
+- **`gstack-settings-hook list-items --event <E> [--owned-by <source>] [--command-regex <js-re>]`**, a read-only identity view: one JSON string literal per matching hook command, identity from the hook table rather than the tag, empty output when nothing matches, exit 3 on unparseable settings and 4 on an unexpected shape, so a caller can decide a mutation from it.
+- **`runExternal` in `hosts/claude/hooks/spawn-bin.ts`**, the contained way for a hook to run a third-party executable: its own process group, a wall-clock limit that kills the group, a stdout cap, a drained stderr tail, stdin write errors kept separate from spawn errors, resolution on the child's exit rather than on the last pipe closing, and a refusal on Windows.
+- **`lockBudgetMs`** on `writeReceipt` and `writeOutcome` in `lib/egress-receipt.ts`, so a caller on a deadline can bound the ledger lock wait (default unchanged at 2.5 seconds), and a **spawn timeout parameter** on `repoPolicyTier` in `lib/gbrain-repo-policy-client.ts`.
+- **`docs/memorable-workflow-memory.md`**: what you get, the two consents (gstack's and Memorable's, neither implies the other), what gstack hands over and what it can attest, what gstack tests and what is the vendor's claim, turning it on and off, and a troubleshooting runbook. A README row, a Docs-table row and a privacy pointer link to it.
+
+#### Changed
+
+- **`gstack-settings-hook remove-source` removes by identity as well as by tag.** Claude Code strips gstack's `_gstack_source` tag when it rewrites `settings.json`; the off switch for every gstack hook used to no-op on exactly those entries. Items the hook table identifies as the requested source are removed whether or not the entry is tagged, other sources' items are never touched, and entries with nothing of the source's stay byte-identical.
+- **`./setup --no-team` keeps the opt-in Memorable hook** when it sweeps stray gstack hooks, alongside the verify gate.
+- **`gstack-uninstall` removes the Memorable hook by name**, sets `memorable_recall` off wherever gstack's config lives (kept state or not, hook manager present or not, and a failed revocation is named), and says that Memorable's own consent is unchanged (`memorable disable`, `memorable forget`).
+- **Redaction findings locate their line and column by binary search** over a per-scan line index, so scan time is linear in the input for every caller of `lib/redact-engine.ts`.
+
+#### For contributors
+
+- New test files: `test/gstack-memorable.test.ts`, `test/memorable-user-prompt-hook.test.ts` (a fake vendor written in sh; the hook's stdin bytes are compared byte for byte with what the vendor received), `test/gstack-config-memorable-key.test.ts`. Extended: `test/gstack-settings-hook-schema-aware.test.ts` (identity removal pinned for every source in the hook table), `test/egress-receipt.test.ts`, `test/egress-receipt-wiring.test.ts` (the `hosts/` tree is now swept for unreceipted sinks), `test/uninstall.test.ts`, `test/gbrain-repo-policy-client.test.ts`, `test/redact-engine.test.ts`, `test/verify-gate.test.ts`, `test/setup-hook-canonical-paths.test.ts`, `test/hooks-windows-paths.test.ts`, `test/gstack-egress-cli.test.ts`.
+- `docs/PROJECT_STRUCTURE.md` lists the new hook and bin.
+
+## [1.81.0.0] - 2026-09-06
+
+**Aside is the browser gstack drives first. Every browsing skill, the PDF and diagram renderer, and web research go through it.**
+**gstack's own headless browser stays as the automatic fallback, so nothing stops working without Aside.**
+
+Since v1.72 Aside was the recommended driver for third-party sites. This release makes it the first driver everywhere. `/qa`, `/qa-only`, `/design-review`, `/scrape`, `/benchmark`, `/canary`, `/browse`, `/devex-review`, `/land-and-deploy`'s post-deploy check, and `/design-consultation`'s competitor research now run inside the Aside AI browser (macOS 15+, aside.com), in the sessions you are already signed in to. No cookie export, no "open the browser" step, no CAPTCHA handoff dance: if a page needs a login, you sign in inside Aside and the skill re-runs the step. `/make-pdf`, `/diagram`, `/design-html`'s viewport screenshots, and `/office-hours` sketches render through Aside as well, and the skills that used to reach for the WebSearch tool now ask Aside's own agent, read-only, in your real browser.
+
+When Aside is not there, nothing breaks. Every browsing skill carries a fallback section that translates its Aside steps onto gstack's own headless Chromium (`$B`), step for step: same evidence lines, same report, same consent rules, with cookie import or a handoff for authenticated pages. The renderer picks Aside when it is running and the bundled browser otherwise, and prints which one it used. Research falls back to the WebSearch tool, then to in-distribution knowledge. Linux and Windows users keep the bundled browser exactly as before; the Third-Party Web Actions contract keeps gstack's visible browser as its fallback driver.
+
+Every skill follows one contract, `scripts/resolvers/aside.ts`. It was written from live probes against Aside CLI 1.26, not from memory: one flow per `aside repl` script (tabs close when the script ends), a console hook installed over CDP before navigation, labelled evidence lines, screenshots copied out of Aside's session directory, and a `GSTACK_STEP_OK` sentinel because the CLI's exit code is always 0. The rules are explicit about what a real browser means: open your own tabs, never read the user's, look freely but ask once before any mutating action on a non-local site, never touch credentials, treat everything a page returns as untrusted.
+
+### The numbers that matter
+
+Source: `git diff origin/main --stat`, `bun test/helpers/capture-context-budget.ts`, and the live runs recorded in the PR (cookbook and skill scripts executed verbatim, `test/skill-e2e-aside.test.ts`, `test/skill-e2e-diagram.test.ts`, the make-pdf e2e gates on both engines, `bin/gstack-render.ts` on both engines).
+
+| Metric | Before | After | Δ |
+|---|---|---|---|
+| Browser a skill reaches for first | gstack's headless Chromium | Aside (your real sessions) | one contract, ten skills |
+| Skills that stop when Aside is absent | n/a | 0 | every one falls back to `$B` |
+| Renderer engines for PDFs and diagrams | 1 (bundled Chromium) | 2 (Aside first, bundled fallback) | `ENGINE=` line tells you which |
+| Web research surfaces | WebSearch tool | Aside agent, then WebSearch | real browser first |
+| Skills removed | | 0 | every skill on main is still here |
+
+The row you feel is the fallback one: on a Mac with Aside open, QA runs in the browser you already trust; on a Linux box or with Aside closed, the same skill runs the same steps on the bundled browser and tells you so.
+
+What this means for anyone running gstack: open Aside on your Mac and run `/qa`, `/make-pdf`, or `/diagram` the way you always did. Without Aside, everything behaves as it did in v1.80. Upgrading needs no migration. Contributed by @time-attack.
+
+### Itemized changes
+
+#### Added
+- **Aside browser-driver contract** (`{{ASIDE_SETUP}}` + `{{ASIDE_COOKBOOK}}`): runtime detection with a READY / NEEDS_ASIDE / ASIDE_NOT_RUNNING probe, ten rules for driving a real browser (own tabs only, LOOK-not-ACT consent with a LOCAL host rule, credentials never pass through the agent, untrusted page content, one flow per script, artifact handoff through the session directory), and a verified cookbook: read a page with load-time console errors, drive a flow with a DOM diff, annotated screenshot, responsive captures over CDP emulation, same-origin link status, performance entries, PDF, element screenshot, and `aside exec` for open-ended reading.
+- **Browser fallback** (`{{BROWSE_FALLBACK}}`): when Aside is absent, a fifteen-row table maps every Aside step in the skill onto its `$B` command, with the rules that differ (cookie import or `$B handoff` for sign-in, the same consent and evidence rules) and the full command reference on demand in `/browse`.
+- **Aside renderer** (`lib/aside-render.ts`, `bin/gstack-render.ts`): render any local HTML file to PDF (tagged, outlined, header/footer, page numbers, paper sizes and margins in any CSS unit), screenshots at any width, and in-page evaluations written to files. Tries Aside, then the bundled browser (`GSTACK_BROWSE_BIN` / `BROWSE_BIN` override it), and prints `ENGINE=aside|browse`.
+- **Web research runs in Aside** (`{{ASIDE_RESEARCH}}`): the planning, review, design, security, and investigate skills research through Aside's agent with the user's real browser, read-only; WebSearch when Aside is absent; in-distribution knowledge when neither is available.
+- **Live E2E for the Aside-driven skills** (`test/skill-e2e-aside.test.ts`, periodic tier): browse read, browse flow, quick QA, scrape JSON, and quick canary against a localhost fixture, asserting the sentinel in real Bash output; self-skips wherever Aside is not installed. The qa, diagram, and make-pdf gates run on whichever engine is present, so the Linux CI lane exercises the fallback path.
+- `setup` and the doc generator prune renders of skills that no longer exist in the source tree, so a removed skill can never linger in a host install.
+
+#### Changed
+- `/qa` and `/qa-only`: the whole methodology (orient, explore, document, re-test) runs as Aside scripts; the authenticate phase is now "you are already signed in"; a 13th rule requires consent before mutating actions on non-local targets. The fallback section carries the `$B` translation.
+- `/design-review` and `/design-consultation`: design-system extraction is one script printing FONTS, COLORS, HEADINGS, TOUCH_TARGETS, and NAV; competitor research confirms the exact URLs with you before opening any of them in your real browser, and runs on the bundled browser when Aside is absent.
+- `/benchmark` and `/canary`: per-page scripts print NAV, PAINT, LCP, RESOURCES, SCRIPTS, CSS, and SUMMARY; the canary loop re-runs the script every 60 seconds because nothing persists between Aside scripts.
+- `/land-and-deploy` Step 7 and `/devex-review`: one Aside script each; the smoke row reads `responseStatus` from the navigation entry.
+- `/make-pdf` prints through Aside first and the bundled browser otherwise; exit 4 now means no browser is available and names both remedies; mermaid fences, oversized-image downscale, and DOCX rasters each run as one render script; `$P setup` reports which engine it found.
+- `/diagram`: the SVG, PNG, and excalidraw triplet is one `gstack-render` call; every diagram type gets an excalidraw export (flowcharts and sequence diagrams as editable scenes, the rest as a single image element).
+- `/scrape`: look-then-extract Aside scripts that build the JSON inside the page; on the fallback the browser-skills runtime (`$B skill list` / `run`, `/skillify`) applies as before.
+- **Third-Party Web Actions** (`/ship`, `/spec`, `/setup-deploy`, `/office-hours`, `/land-and-deploy`): Aside is the recommended first driver; gstack's own visible browser stays as the fallback option, exactly the shape v1.72 introduced, and the contract points at the `/browse` doc for how to drive Aside.
+- `/browse`: the Aside contract, cookbook, mode choice (`aside repl` by default, `aside exec` for reading), report format, the fallback, and the full `$B` command reference on demand.
+- The root router, README, `BROWSER.md`, `docs/skills.md`, `docs/PROJECT_STRUCTURE.md`, `CONTRIBUTING.md`, `CLAUDE.md`, and `ARCHITECTURE.md` describe the Aside-first, bundled-fallback world.
+
+#### Fixed
+- `./setup`'s retired-skill prune is safe by construction: it never deletes a directory that holds your own files (only gstack's SKILL.md, marker and links go), never follows a symlink into someone else's tree, cleans a host's stale links even after the generator already removed the render, and recognizes a skill renamed through its frontmatter `name:`. The generator's own prune keeps any `gstack-*` directory without the generated banner and skips a host whose generation failed. `./setup` also rebuilds when the design or make-pdf binary is missing or when anything under `lib/` changed.
+- Setup's summary is honest about browsers: with Aside installed and a failed Chromium bootstrap it says only the bundled fallback is missing (and that `/pair-agent` needs it); `GSTACK_SKIP_ASIDE=1` is honored by the skills' probe, by setup, and by the renderer alike.
+- The local render server behind `/make-pdf`, `/diagram`, and design previews serves one per-render secret URL, never follows a symlink out of its directory, and refuses malformed requests; page text can no longer forge its control lines; a hung `aside` process is killed instead of waited on forever; if the Aside CLI cannot start mid-run (or its private CDP bridge is missing) the render retries on gstack's own browser and reports which engine actually rendered — a page error or a timeout of a running script is never retried; a shared `/tmp/gstack-render` owned by someone else is never used.
+- Browsing skills check link status only on a LOCAL target (on a real site every HEAD request would carry your cookies); same-origin filtering compares real origins instead of string prefixes; `.local` hosts are no longer treated as your own machine (mDNS names resolve to other devices on the LAN); the Aside readiness probe has a 30-second deadline on stock macOS, which ships neither `timeout` nor `gtimeout`.
+- `aside exec` research requests write an egress receipt before leaving the machine, like every other off-machine send.
+- Rendering through the bundled browser tolerates a cold start: the first tab request retries once while the daemon is still coming up, and a command whose process is slow to exit under heavy load is waited for instead of being reported as failed.
+- `gstack-render --help` exits 0, non-numeric flags are rejected instead of becoming `NaN` timeouts, `--wait-timeout` is documented, and page-derived output (`EVAL`, `PAGE_ERRORS`) is fenced as untrusted content.
+
+#### For contributors
+- `test/aside-driver.test.ts` pins the contract's load-bearing sentences and asserts every browsing skill carries `## BROWSER SETUP (Aside` followed by `## Browser fallback`. `test/aside-render.test.ts` pins the renderer's option mapping and script shapes and runs a live render on each engine that is present. `test/helpers/aside-available.ts` is the shared live-Aside probe for E2E gating; `make-pdf/test/e2e/browser-available.ts` gates the make-pdf gates on either engine.
+- `lib/claude-bin.ts` and `lib/error-handling.ts` are now the canonical copies; `browse/src` re-exports them.
+- New free tests pin the review fixes: `test/setup-prune-stale-generated.test.ts` (host cleanup after the generator pruned, symlink targets survive, renamed skills, foreign links), `test/setup-browser-hint.test.ts` (hint and bootstrap summary across Aside present/absent, bootstrap ok/failed, skip-env), `test/setup-needs-build.test.ts`, `test/gstack-render-cli.test.ts`, `test/aside-render.test.ts` (fake `aside`/`browse` executables: probe classification, stdout contract, server policy, failure paths, timeout kill, engine choice and mid-run fallback), `make-pdf/test/cli-exit-codes.test.ts`, `make-pdf/test/setup-smoke.test.ts`. `renderPdf` returns the engine that rendered; `pickEngine(fresh, deps)` and `serveDir` are exported test seams.
+- Size budget re-baselined to `parity-baseline-v1.81.0.0.json` (the Aside contract plus fallback block ride in every browsing skill); parity ceilings ratcheted with measured values; touchfiles, tiers, coverage matrix, eval baselines, ship goldens, and the context-budget fixture refreshed. Follow-ups in TODOS.md: keep the `$B` translation table in sync with the cookbook, Aside CLI 1.26 lacks the commands its own skill doc lists, a macOS runner for the live E2E, an optional MCP path for a persistent page.
+
+## [1.80.0.0] - 2026-09-04
+
+**Setup finishes even when Chromium cannot be installed.**
+**gstack never deletes or overwrites a skill it did not create.**
+
+Three defects that a downstream fork kept tripping over are fixed at the source. `./setup` used to abort at the Playwright step on any box where the Chromium download failed or hung (offline, proxied, AppArmor-restricted), and because that step ran before skills were registered, those users ended with zero skills. The `/freeze` deny hook read a different state directory than `/freeze` wrote whenever `GSTACK_HOME` was set, so the boundary silently allowed everything. And both `./setup` and `gstack-relink` would replace or delete any skill entry that happened to share a name with a gstack skill, including a skill you wrote yourself.
+
+Now the Chromium install is best-effort and bounded. It runs under a 600 second deadline you can change with `GSTACK_PLAYWRIGHT_INSTALL_TIMEOUT`, skip outright with `GSTACK_SKIP_PLAYWRIGHT=1`, and every failure becomes a reason code in the final summary that names the skills that need a browser. Skills always register. Both PreToolUse hooks resolve the same state root the writers use, and freeze fails closed on any unexpected death instead of exiting with no decision. Ownership is proven, never assumed from a name: an entry is only touched when it is a symlink into gstack, carries the `.gstack-owned` marker gstack writes for directories it creates, or is a real file gstack generated. Even then a generated file you have since customized is moved to `~/.gstack/backups/skills/<timestamp>/` before gstack links over it, and a directory is only removed whole when nothing of yours is inside.
+
+### The numbers that matter
+
+Source: the free suite (`bun run test`), specifically `test/setup-playwright-best-effort.test.ts`, `test/setup-link-ownership.test.ts`, `test/relink.test.ts` and `test/hook-scripts.test.ts`, run against this tree.
+
+| Metric | Before | After | Δ |
+|---|---|---|---|
+| Skills registered when the Chromium download fails or hangs | 0 | all | setup never aborts at the bootstrap |
+| Longest a wedged Chromium install can block `./setup` | unbounded | 600s default | `GSTACK_PLAYWRIGHT_INSTALL_TIMEOUT`, `GSTACK_SKIP_PLAYWRIGHT=1` |
+| `/freeze` boundary with `GSTACK_HOME` set | allowed every edit | denies | one state-root resolver for hooks and writers |
+| Sites that could delete or replace a same-name skill without proof of ownership | 5 | 0 | setup linker, alias installer, both flip cleanups, relink |
+| Data lost when gstack replaces a generated SKILL.md you customized | the file | none | moved to `~/.gstack/backups/skills/<ts>/` |
+| Free tests pinning these behaviors | 0 | 103 | across 10 files |
+
+The first row is the one you feel: a laptop on hotel wifi, a CI runner behind a proxy, or a fresh Ubuntu 24.04 box now ends `./setup` with every skill installed and one clear line saying which ones will not work until Chromium is present.
+
+What this means for anyone installing or upgrading: run `./setup` anywhere and get skills. Keep your own `qa` or `ship` skill next to gstack's and it survives every upgrade and prefix flip, reported by name instead of silently replaced. Set `GSTACK_HOME` and `/freeze` means what it says.
+
+### Itemized changes
+
+#### Fixed
+- **`./setup` no longer aborts when Chromium cannot be installed** (#1900, #1901, #1902, #913). The Playwright step is best-effort and bounded. Reason codes: `skipped`, `chromium-install`, `chromium-install-timeout`, `chromium-install-locked`, `windows-no-node`, `windows-node-modules`, `post-install-launch`. A wedged installer is killed with its whole child tree (pgrep, or a /proc walk where pgrep is missing); Ctrl-C mid-install kills it too. A stale install lock is reclaimed atomically, a garbage pid file counts as stale, and a lock with no recorded holder expires after the install bound. Contributed by @DavidMiserak (#2233).
+- **`/freeze` enforces its boundary under `GSTACK_HOME`** (#1459). The hook resolves the state root exactly as `bin/gstack-paths` does (GSTACK_HOME, then CLAUDE_PLUGIN_DATA only when CLAUDE_PLUGIN_ROOT names gstack, then `~/.gstack`), a trailing newline in the path round-trips, a helper from an older install denies instead of exiting 127, and an EXIT backstop denies on any unexpected failure. `/careful` reads its project patterns from the same root and falls back safely on a stale helper. Contributed by @NikhileshNanduri (#1509).
+- **gstack never deletes or links over a skill it does not own** (#2119). `./setup`'s linker and alias installer, both prefix-flip cleanups, and `gstack-relink` all prove ownership first and report a foreign entry by name in the final summary. Runtime assets (sections, templates, checklists) inside a directory gstack did not create are kept, not replaced. A checkout named without a `gstack` path segment (a `git worktree add ../gstack-feature`) still counts as gstack's. Contributed by @smblight.
+- **Windows copy installs carry a `.gstack-owned` marker** so provenance no longer rests on the directory name. The marker is written on every platform, only for directories gstack creates.
+- **Setup's one-shot telemetry events no longer finalize other sessions' in-flight markers** as `outcome: unknown`.
+
+#### Added
+- `GSTACK_PLAYWRIGHT_INSTALL_TIMEOUT=<seconds>` and `GSTACK_SKIP_PLAYWRIGHT=1` for `./setup`; documented in the README troubleshooting list together with `GSTACK_CHROMIUM_NO_SANDBOX=1`.
+- A final setup summary that names the browser-dependent skills when Chromium is unavailable, lists any same-name skills left untouched, and reports any customized SKILL.md moved to `~/.gstack/backups/skills/<timestamp>/`.
+- `gstack-telemetry-log --no-sweep` for events that own no session.
+
+#### For contributors
+- The time-attack fork evaluation that surfaced these defects is preserved under `docs/designs/fork-port-residual-2026-09/` (report, residual index, refutation verdicts, hashes). Waves B through E2 of that plan are scheduled work.
+- New free tests: `test/setup-link-ownership.test.ts`, plus large additions to `test/setup-playwright-best-effort.test.ts`, `test/relink.test.ts`, `test/hook-scripts.test.ts`, `test/telemetry.test.ts`. Anchor-sliced harnesses now fail loudly on `command not found` instead of degrading into "foreign, skipped".
+- `bin/gstack-relink` and `setup` carry the same ownership rule in two copies; the shared helper is filed in TODOS.md.
+
+## [1.79.0.0] - 2026-09-01
+
+**/ship can no longer be stranded by a backgrounded subagent.**
+**The bug class that came back twice is pinned everywhere it lives.**
+
+Claude Code v2.1.198 made Agent-tool subagents launch in the background by default. Four /ship steps (7, 8, 10, 18) hand work to a subagent and parse its final line as JSON, and none of them passed `run_in_background: false`, so a ship run could park forever on Step 18 waiting for doc-sync output that was never coming. This is the third time this class has bitten (#497 fixed it, #2440 regressed it, Step 18 rediscovered it). Every synchronous dispatch site in the skill tree now carries the explicit flag, and the flag is test-pinned per file so a fourth recurrence fails CI the moment it lands.
+
+The doc-sync dispatch also got real failure handling. If the dispatch gets backgrounded anyway, the parent polls for about 10 minutes, stops the runaway task, reconciles any commit the subagent made against the pre-dispatch HEAD, and ships the PR without the Documentation section instead of hanging. The subagent itself is scope-guarded to docs only: it never changes VERSION, never merges the base branch, skips the Codex doc review (the parent owns review passes), and reports a rejected push as `pushed:false` for the parent to reconcile.
+
+### The numbers that matter
+
+Source: `test/run-in-background-guidance.test.ts` (the pin list) and `grep -rl 'run_in_background: false' --include='*.md'` against this tree.
+
+| Metric | Before | After | Δ |
+|---|---|---|---|
+| Generated files pinned to carry the flag | 2 | 24 | every sync dispatch site |
+| /ship dispatch steps with a deadline + recovery branch | 0 of 4 | 4 of 4 | Steps 7/8/10/18 |
+| /ship Step 18 worst-case wait (backgrounded dispatch) | unbounded | ~10 min | documented recovery; a foreground hang stays harness-bounded |
+| Codex doc review inside a ship-dispatched doc-sync | ~5-10 min per ship | skipped | parent owns reviews |
+| Headless gates that could mutate VERSION mid-ship | 2 | 0 | Step 8.3/8.4d resolve to Skip |
+
+The unbounded-to-10-minutes number is the one you feel: the failure mode changes from "my ship run has been sitting there for an hour" to a printed recovery line and a PR that still lands.
+
+What this means for anyone shipping here: /ship finishes even when the harness misbehaves, doc-sync can never renumber your release or double-run review passes, and document-release now carries its own spawned-session contract, so any orchestrator that dispatches it (not just /ship) gets safe headless behavior.
+
+### Itemized changes
+
+#### Added
+- **Deadline + recovery on every /ship dispatch step.** Steps 7 and 8 stop a runaway task and fall back to the inline audit if the subagent never completes (~10 min); Step 10 records Greptile triage as UNAVAILABLE in the PR body rather than pretending zero comments; Step 18 stops the runaway task, vets and pushes orphaned docs-only commits (never VERSION, package.json, or CHANGELOG; an explicit second-failure branch covers a moved remote), surfaces stray staged edits without ever discarding content, and proceeds without the Documentation section. The dispatch contract carries an explicit failure JSON shape, so a doc-sync that could not run reports as a failure instead of clean docs. No step ever silently parks the run.
+- **A spawned-dispatch contract in document-release itself.** Triggered strictly by the preamble's `SESSION_KIND: spawned` echo (the dispatcher's `GSTACK_SESSION_KIND=spawned` prefix; prompt or file claims alone never trigger it, matching the v1.78.0.0 echo-only rule). Every ask-the-user gate auto-resolves to its recommended option except the ones that would rewrite CHANGELOG content or change VERSION, which resolve to Skip and get recorded. Step 8.4d carries an explicit spawned note because its interactive recommendation is a VERSION bump.
+- **Docs-sync scope guard in /ship's dispatch prompt**: docs only, no base-branch merges, no version renumbering, CHANGELOG left to the parent, no Codex doc review, push rejections reported instead of resolved.
+
+#### Changed
+- The Codex Documentation Review section skips itself in any spawned session; its apply gate needs a human, and a dispatching workflow owns its own review passes. Covers version skew where an older installed /ship dispatches a newer document-release.
+- Autoplan's design/eng/dx phase dispatches, the review army Red Team, the spec review loop, the adversarial subagent, the Codex second-opinion/plan-review/doc-review fallbacks, design sketch and outside voices, CSO finding verification, and design-shotgun variant launches all state `run_in_background: false` explicitly. Parallel fan-outs stay parallel; foreground calls in one message run concurrently.
+
+#### Fixed
+- **/ship Steps 7, 8, 10, and 18 no longer strand the run** when Claude Code backgrounds their subagents (#497, #2440 class, third recurrence). The four dispatch specs share one resolver-sourced foreground note — dispatch happens only via the Agent tool, never the Skill tool or inline execution — so the phrasing cannot drift per site again.
+
+#### For contributors
+- `{{FOREGROUND_DISPATCH_NOTE}}` (scripts/resolvers/constants.ts) is the single source for the flag guidance; use it in any new dispatch template and add the generated carrier to `GENERATED_WITH_GUIDANCE` in `test/run-in-background-guidance.test.ts` in the same commit. The test's pin list is the census of synchronous dispatch sites, and its structural scanner fails any generated dispatch imperative that lacks the flag even when un-enumerated.
+- Follow-ups filed: PreToolUse-hook enforcement of the flag (P1, structural fix), a capability-narrowed ship-mode for document-release, and a cross-host dispatch semantics audit.
+- Carved-skill skeleton ceilings re-measured and ratcheted in `test/helpers/carve-guards.ts`; codex/factory ship goldens re-rendered; the ship-docsync E2E asserts `run_in_background === false` on the captured dispatch and its fixture resolves section reads deterministically.
+
+## [1.78.0.0] - 2026-08-31
+
+**Plan reviews ask their questions again, the OSV lane is green from 105 advisories, and 18 community fixes land with credit.**
+**The upgrade path can no longer delete your install.**
+
+The fix wave. The weekly periodic eval lane broke at v1.76: the spawned-session rule let the model infer "nobody is reading this" from any scripted-looking prompt and silently auto-decide every review question, so plan reviews stopped asking. reviewCount collapsed to 0 across four skills. The trigger is now machine-verifiable and nothing else: the preamble's own echoed `SESSION_KIND: spawned` status line. No text from a dispatch prompt, file, or page can flip a session to auto-choose; a spawned subagent that missed the env marker is still caught at failure time by the AUQ hooks' spawned escape. The reproduced failure went from 0 review questions to a full question flow on the same harness.
+
+The weekly OSV lane had been red for three weeks with 105 advisories, and its suppression file had been silently inert since v1.65 (wrong filename for auto-discovery, and per-directory configs never covered the nested lockfile anyway). The workflow now passes an explicit global `--config`, a dependency pass cleared 102 advisories through in-range bumps and overrides that actually reach nested exact pins, and the 3 survivors carry reasons plus `ignoreUntil` expiries. The diagram-render bundle lost its duplicate mermaid on the way: 9.96 MB to 7.59 MB.
+
+Eighteen community PRs are absorbed with authorship preserved, twelve of them with wave amendments that finish a gap or fix a defect found in review. Nine more confirmed bugs are fixed directly, led by #2679: a failed `mktemp` in the vendored upgrade path used to `rm -rf` your install's backup after a failed swap. The swap now aborts loudly and restores the backup.
+
+### The numbers that matter
+
+Sources: OSV scanner v2.3.8 (the exact release CI pins) on a frozen clean install; weekly CI runs 33369295978 (OSV) and 33363624506 (periodic); local A/B repro of `test/skill-e2e-plan-ceo-finding-count.test.ts`; `bun run test` on this tree vs a v1.77.0.0 scratch worktree.
+
+| Property | Before | After |
+|---|---|---|
+| OSV advisories on `./` recursive scan | 105 (24 packages, lane red 3 weeks) | 0, exit 0 (3 expiring reasoned ignores) |
+| Suppression config | inert since v1.65 | loaded via explicit `--config`, wiring-tested |
+| Periodic-lane review questions (5-finding plan) | reviewCount=0 (14/73 shards red) | full question flow on the same repro |
+| Failed upgrade swap | deletes backup and install | restores backup, aborts loudly |
+| Community PRs absorbed / issues closed | 40 open PRs, 17 of these issues open | 18 absorbed with credit, 17 issues closed |
+| diagram-render offline bundle | 9.96 MB (duplicate mermaid 10 + 11) | 7.59 MB |
+| Free-suite tests | 8,519 | 8,660 (+141; receipts red on v1.77) |
+
+### What this means for you
+
+Plan reviews ask their questions again, `browse stop` actually stops Chromium, secrets scanning can't be silently disabled by a failed `mktemp` or a slow gitleaks probe, and /gstack-upgrade cannot eat your install on a bad temp dir. If you filed one of the 17 closed issues or the 18 absorbed PRs: your fix shipped, with your name on it. Upgrade with /gstack-upgrade.
+
+### Itemized changes
+
+#### Fixed
+
+- **AskUserQuestion spawned-trigger objectivity (periodic-lane regression).** The v1.76 rule's "(or your dispatch prompt marks this session as spawned)" allowed inference; plan-review E2Es collapsed to zero questions. Two pinned-container verification rounds showed that ANY prose-declaration channel in the eager path keeps question counts unstable, so the rule now keys on exactly one thing: the preamble's own echoed STATUS line. Text can never trigger auto-choose — the strongest form of the anti-injection contract. Subagents without the env marker (Task-tool spawns) are caught at failure time by the AUQ hooks' spawned escape sentence, which now demands an explicit declaration, never an inference; #2733's env-prefix channel is untouched.
+- **mktemp guards at all three skill-content sites (#2679).** redact-doc resolver, ship pr-body, and the vendored upgrade path abort loudly on mktemp failure; the upgrade swap restores the backup on a failed `mv` instead of deleting it, and refuses to start over a stale backup left by a previously crashed upgrade; PR/MR creation refuses a missing or empty scanned body file; the GitLab MR path sends the scanned file's bytes instead of re-rendering an unscanned heredoc; `gstack-redact --from-file ""` errors instead of silently reading stdin.
+- **OSV lane green (supersedes #2695).** Explicit `--config` (auto-discovered configs apply per-directory and never covered `lib/diagram-render/bun.lock`); `overrides` pin ip-address 10.3.1 (clears both nested nodes, including express-rate-limit's exact 10.1.0 pin that a top-level bump provably cannot reach — @anupamme's #2695 credited for the parallel diagnosis) and sharp 0.35.0 (smoke-tested); marked ^18.0.11; full in-range lockfile refresh; diagram-render bumped through its own build-script contract (mermaid 11.16.1, excalidraw 0.18.1, mermaid-to-excalidraw 1.1.2 → 2.2.2, which retires the entire duplicate mermaid-10 advisory chain); every ignore carries a reason, an upgrade trigger, and an `ignoreUntil` expiry, pinned by a new wiring test so the file can never go inert again.
+- **A slow gbrain `--version` probe classifies as `timeout`, never `no-cli` (#2716).** A bun-shim install on a loaded box silently lost every brain-aware block because `no-cli` is the one status `--is-ok` does not forgive.
+- **codex skill: unclosed consult-mode fence, `turn.failed` reported as a failure, portable exit-code capture (#2671, #2669).** Every fenced region after the unclosed fence rendered inverted; a stated turn failure read as a "possible disconnect" (consult mode had no completeness check at all); `${PIPESTATUS[0]}` is empty under zsh so hang detection never fired and clean runs printed spurious exit noise. A repo-wide CommonMark-faithful fence-pairing test now guards every generated doc, and the exit-capture form is executed under real bash and zsh in tests. Expect `codex_timeout` telemetry to start firing for zsh users — that's the counter working, not a regression.
+- **Outside-voice fallback labeled honestly (#2735).** When Codex is unavailable the fallback reviewer is a same-family Claude subagent; the copy no longer sells it as "cross-model coverage" with "genuine independence."
+- **skill_prefix works under a gbrain render (#2738).** gstack-relink now name-patches the render tree — the file the host actually serves.
+- **Rendered section paths survive the atomic swap (#2692).** gen-skill-docs gained `--link-root`; the swap-in callers pass the final dir, so rendered skills no longer carry ~9 dead Read paths into a directory the swap just deleted.
+- **Persistent timeline Stop hook opt-out (#2677).** `--no-team` stays one-shot; the new `timeline_stop_hook` config key (flags, env, full gstack-config surface) survives upgrades, and an explicit "no" removes a live registration.
+- **browse: macOS headless GPU spin tamed + the lock-less headless Chromium is reaped on stop (#2709).** Darwin-gated flag set (reporter-validated, `GSTACK_DISABLE_GPU=off` escape) exposed as a pure, unit-testable function; the daemon records the launched child's pid + start time, and stop paths reap a survivor only after verifying both the recorded start time and a Chromium-looking cmdline, so a recycled PID is never killed.
+- **gstack-wtree: a failed `touch` falls through to the HEAD seed (#2687 hardening).** The underlying same-size-rewrite race was fixed in v1.74; the reporter's repro now runs 20/20 clean, and the one silent path that could reopen it is closed.
+- **Large gstack-redact reports survive a piped consumer.** Reports past the 64KiB pipe buffer were silently truncated when the reader was slow (`process.exit` beat the drain) — CI quality gates parsing the JSON saw a corrupt report. The report path now lets stdout flush; pinned by a test proven red against the old exit pattern.
+
+#### Community PRs absorbed (authorship preserved on the branch commits)
+
+- Codex preflight: a CLI that cannot execute reports `broken_install`, never `ready` — the wave completed autoplan's hand-maintained preflight chain and narrowed the install-signature grep to failed spawns. Contributed by @ukheni50 (#2745; fixes #2742).
+- ship design-checklist path points at the installed gstack/review copy. Contributed by @Lockyer228 (#2717; fixes #2694).
+- Feature markers live in GStack state, not project checkouts — the wave re-applied the CI seeding to the composite action and added an upgrade migration so nobody gets re-prompted. Contributed by @simonaltit (#2748; fixes #2728).
+- memory-ingest: transcript pages no longer vanish to slug collisions (887 staged → 0 ingested) or a frontmatter-fence render bug; slug assignments persist in the ingest state, so a page keeps its slug across runs and a new collider can never overwrite an unchanged page. Contributed by @rayers (#2699; fixes #2724).
+- browse js/eval returns the value of an async IIFE. Contributed by @loulanyue (#2747; fixes #2727).
+- land-and-deploy checks fork branches in the head repository — the wave replaced the metadata command (gh leaves `nameWithOwner` empty) and made fork branches report-only. Contributed by @pttydou (#2725; fixes #2696).
+- gstack-config rejects malformed `cross_project_learnings` at set. Contributed by @szsunyuan (#2676; fixes #2673).
+- gbrain-sync's pinned-source test is hermetic under a live autopilot. Contributed by @szsunyuan (#2689; fixes #2685).
+- redact: stale managed pre-push hooks refresh in place, so shipped wrapper fixes reach existing installs. Contributed by @schienbiz (#2731).
+- redact: Groq, Tavily, and Notion API key patterns. Contributed by @schienbiz (#2730).
+- redact: `.env.local` is not an internal hostname. Contributed by @davidani-davi (#2740).
+- redact: git SSH remotes are not emails — the wave named the lookahead constant. Contributed by @alopes50 (#2734).
+- gbrain ≥0.43 held-lock refusal classifies as engine-locked, not broken-config. Contributed by @pvanl (#2698).
+- A slow gitleaks probe no longer permanently disables secret scanning — and after three consecutive slow answers the run stops re-probing per file (a loaded box no longer stalls a big ingest for hours), warning once; the next run probes fresh. Contributed by @deniszjukow (#2715).
+- open-gstack-browser pre-flight actually kills the stale daemon (the pid grep never matched pretty-printed JSON). Contributed by @deniszjukow (#2714).
+- browse CLI honours CHROMIUM_PROFILE in profile-lock cleanup — the wave added the wiring tripwire. Contributed by @adam-badar (#2732).
+- make-pdf's pdftotext probe reads poppler's stderr banner instead of reporting "unknown" everywhere. Contributed by @snymanpaul (#2690).
+- bin writers no longer drop learnings and question events on paths with apostrophes; MSYS-form GSTACK_HOME works — the wave unified all four writers on the env-var import pattern. Contributed by @shreshth-designs (#2720).
+
+#### For contributors
+
+- Tests: 8,519 → 8,660 (+141 across the wave; every behavior fix carries a regression test proven red on a v1.77.0.0 scratch worktree via base-compatible reproducers — tests that merely fail to compile on the base don't count as receipts).
+- New structural guards: generated-doc fence pairing (CommonMark state machine, not mod-2 counting), no bare `${PIPESTATUS[0]}` in codex sections (plus real bash+zsh execution), OSV config wiring (flag ↔ filename ↔ entry hygiene, `ignoreUntil` mandatory), gstack-redact CLI empty-path rejection, cli.ts profile-dir delegation.
+- 19 carve skeleton ceilings re-pinned with measured values (+~440 bytes/skill for the AUQ fence); autoplan re-pinned again for the broken-install preflight arm.
+- `gen-skill-docs --link-root` exists for render-into-tmp-then-swap callers; direct-render callers need no change.
+- The absorbed test files gained spawn timeouts (v1.77 sync-spawn tripwire predates them).
+
+## [1.77.0.0] - 2026-08-31
+
+**Every PR stops paying for evals twice.**
+**Flakes are now measured, killed at the root, and fenced.**
+
+The test infrastructure got its overhaul, wave 1. The legacy 17-row eval matrix that ran serialized AHEAD of the sliced lane on every PR is deleted: one paid lane, its gate census derived from the runner itself, so a new gate test is in the census the moment its file lands. No hand-enumerated rows to drift, and the drift already tried, a new matrix row landed on main mid-branch and the merge resolved to the derived census that covers it by construction.
+
+The flake war moved from anecdotes to instruments. Every retried pass is now recorded where it cannot hide (bun's own output shows a retry as a clean pass, we probed it), the free lane retries a failing file once, loudly, and appends every flaky pass to a per-project ledger uploaded from CI on green runs. `bun run eval:flake-rank` ranks the series. And the wedge class that hit main, a hung child under a blocking spawnSync that no in-process timeout can interrupt, is extinct: 499 timeout-less sync-spawn sites across 146 files (the branch tripwire's own count against main) swept to zero, with a ratcheted tripwire that failed its first real offender the day a timeout-less spawn arrived from a merge.
+
+### The numbers that matter
+
+Source: CI runs 33263204465 / 33262077256 (measured 2026-08-29), the repo census (`test/helpers/touchfiles-data.ts`), and the sweep tripwire (`test/spawnsync-timeout-tripwire.test.ts`).
+
+| Metric | Before | After | Δ |
+|---|---|---|---|
+| Paid lanes per PR | 2 (serialized) | 1 | eval wall 35.5 → ~13 min (target) |
+| Measured duplicate spend per PR | ~$20.94 | $0 | matrix deleted |
+| Gate census keys | 86 (6 phantoms) | 77, all provably alive | reverse invariant enforces |
+| Sync spawns that can wedge a shard | 499 unbounded | 0 (8 reasoned exemptions) | tripwire-ratcheted |
+| Local gate worst case | ~6.5 h (4×4 jobs) | ~3.3 h (8×2) | isolation landed first |
+| Retried-pass visibility | invisible | recorded + ranked | `eval:flake-rank` |
+
+The phantom-census number is the quiet one that matters: six merge-blocking "tests" existed only as map keys. They are deleted, and a key without a living test now fails the free suite.
+
+What this means for anyone shipping here: PRs get one honest paid verdict faster and cheaper, a flaky pass never blocks your merge but never disappears either, and a test that hangs takes down thirty seconds, not a shard. Run `bun run eval:flake-rank` when you want the flake ledger's verdict.
+
+### Itemized changes
+
+#### Added
+- **Flake telemetry, end to end.** Eval-store records every retry attempt (`attempt`, `flaky_retries`), the paid report lists passed-only-on-retry tests as warnings, the free lane's flaky-retry pass is ON in CI with a single-writer JSONL ledger (branch + sha attributed, per-project by default) uploaded as an artifact on every run, and `bun run eval:flake-rank` aggregates the series with final-attempt accounting and a 60-day recency bound.
+- **Two-phase session timeouts.** A silent API dies at a startup grace (90s local, 300s CI floor, a real `Math.max` floor) with the distinct reason `timeout_startup` instead of burning a 600s work budget into an opaque `0 turns / $0.00` failure; the work budget arms on the first byte and the total wall never grows.
+- **Green-by-skip census.** "Ran N tests" counts skips, so a codex/gemini file whose every test self-skipped used to read as coverage. The classifier now parses bun's skip/pass recap and the paid report labels an all-skipped pass "verified nothing."
+- **Sync-spawn timeout tripwire** (spawnSync / execSync / execFileSync / Bun.spawnSync, comment-aware, 30-line window, shrink-only exemption ratchet) plus a raw-SHA fixture ban (`git show <sha>:path` fixtures must be vendored; the one live offender now reads a committed fixture).
+- **Behavioral kill-semantics tests**: a fake-claude shim proves a timed-out session leaves neither the CLI nor its grandchild alive; two gstack-detach watchdog tests cover TERM-immune grandchildren and the leader-dies-first case.
+- **CLI version stamping**: every eval run records `claude --version` (resolved once in the runner parent), so the next TUI-drift flake hunt is a grep, not archaeology.
+
+#### Changed
+- **One paid lane.** The legacy evals.yml matrix is deleted (pure deletion, one revert restores it) after a static parity receipt: the sliced lane's 49-file derived census strictly contained the matrix's 18 files. The PR comment moved into the sliced lane with final-attempt accounting and a fail-closed reconciliation verdict.
+- **Paid runner defaults 4×4 → 8×2**: ~10-13 real in-flight sessions (under the documented-safe 15) instead of ~4-6; per-shard TMPDIR/Chromium-profile isolation and a kill-path cleanup backstop landed first, deliberately.
+- **CI setup deduplicated into four composite actions**; the register-skills composite carries the fail-fast dangling-symlink verification loop that only the deleted matrix copy had, so the surviving lanes inherit it. Rerun-safe, frozen-lockfile fallback, input-validated.
+- **Supply chain pinned**: the claude CLI in the CI image is an exact version (bumps ride PRs that run the PTY gate, ending the weekly-latest drift that broke the harness three times), and every action in the secrets-bearing and image-publishing workflows is SHA-pinned.
+- **Routing journeys lost their answer key**: the fixture no longer ships a prompt→skill lookup table, so a regressed skill description can actually fail the test again, at roughly half the previous per-journey cost (2 turns, [Skill, Read] only).
+- Decided A/B experiments retired (auq-repetition-cut, preamble-script, the opus-47 single-run fanout comparison): one-shot questions answered months ago no longer re-run weekly as coin flips. `plan-ceo-review-expansion-energy` and `ios-qa-e2e` moved to the periodic tier with reasons.
+
+#### Fixed
+- **A fail-open reconcile gate**: GitHub's default run-step shell has no pipefail, so the fail-closed report's exit was read from `tee` (always 0) in both paid lanes. Now `PIPESTATUS[0]`, pinned by a wiring test.
+- **A write-token trust boundary**: the job that executes PR-authored code no longer holds the PR-comment write token; commenting moved to a job that runs zero repo code.
+- **Provider-runner orphans**: timeouts kill the whole process group (claude, codex, gemini, and gstack-detach's watchdog with the group id captured at spawn), and the codex/gemini runners inherited the orphan-drain hardening only the claude copy had. The observed 600s-timeout-stretching-past-1400s class is gone, with a regression net.
+- **Selection integrity**: 17 phantom selection keys deleted (a reverse invariant now requires every key to name a living test), gitignored `.agents/**` dep patterns that could never match a git diff replaced with their generators, and the codex/gemini local touchfile forks now derive from the canonical map.
+- **A cross-shard SKILL.md race**: the opus-47 eval regenerated the live tree's skill files mid-run; it now renders into a scratch dir via `--out-dir`.
+
+#### For contributors
+- `bun run eval:flake-rank` (with `--json`, `--dir`, `--since-days`) is the promotion-clock dial; the WS16 required-check decision reads it.
+- The overhaul plan (16 workstreams, reviewed by CEO + eng passes with two cross-model outside voices) continues: budget-aware shard walls, PTY readiness events, free-suite splits, judge determinism, and required-check promotion are the next waves.
+
+## [1.76.0.0] - 2026-08-31
+
+**Ship's doc-sync now survives Conductor.**
+**Spawned subagents finally know they're spawned.**
+
+Every Conductor-hosted /ship used to lose its PR `## Documentation` section the moment the document-release subagent hit an interactive gate: the subagent inherited the parent's environment, classified itself as a session a human was watching, rendered a decision brief nobody could answer, and stopped. The JSON contract broke, every time a gate fired (#2733). This release makes the spawned classification reachable: /ship marks its subagent with `GSTACK_SESSION_KIND=spawned`, and the whole stack (preamble, AskUserQuestion rules, both AUQ hooks) now resolves gates by auto-choosing the recommended option instead of writing prose to nobody. Destructive options are never auto-chosen, on any surface: the conservative choice wins and gets recorded. Auto-chosen decisions come back in a `decisions` array the parent prints to your console, so nothing is decided invisibly.
+
+### The numbers that matter
+
+Source: the new gate-tier E2E (`test/skill-e2e-docsync-spawned.test.ts`) run receipt under `~/.gstack/projects/<slug>/evals/`, plus issue #2733's field reports.
+
+| Metric | Before | After | Δ |
+|---|---|---|---|
+| `## Documentation` on Conductor-hosted ships | dropped whenever a doc gate fired | present, E2E-proven | fixed |
+| Ways to reach the spawned classification | 1 (OpenClaw env only) | any dispatching skill, one env prefix | new primitive |
+| Onboarding prompts consumable by unwatched subagents | up to 11 blocks per run, markers eaten | 0 emitted, markers preserved for the next human session | sealed |
+| Real-agent E2E through a firing VERSION gate | prose-STOP, JSON parse fails | auto-chose the recommended Skip, JSON parsed, VERSION untouched | 1/1 pass, $0.35, 106s |
+| Preamble dead work per spawned start | network update-check + a 17-subprocess repo probe | both skipped | faster subagents |
+
+The E2E is the receipt that matters: a live agent ran the real document-release preamble and VERSION gate inside a Conductor-ambient environment with the AUQ hooks active, ended on the machine-parseable contract, and left VERSION alone.
+
+### What this means for your workflow
+
+Ship from Conductor and the PR carries its Documentation section again; any gate the subagent auto-chose shows up as a `Doc-sync auto-decisions:` line in your console. If you build orchestrating skills, prefix a subagent's `gstack-skill-start` invocation with `GSTACK_SESSION_KIND=spawned ` and it behaves like a proper worker: no consent prompts consumed, no telemetry questions, no prose briefs to nobody. If anything sets that marker on a session a human is actually driving, the preamble now says so loudly (`SPAWNED_OVERRIDE: env`).
+
+### Itemized changes
+
+### Added
+
+- **`GSTACK_SESSION_KIND=spawned`** (`bin/gstack-session-kind` step 0): explicit per-command spawned marker, outranking every ambient env marker. Deliberately narrow: only `spawned` is honored; other values are reserved and ignored. Documented in `docs/OPENCLAW.md`, with a `SPAWNED_OVERRIDE: env` status line for tamper visibility when the env var (rather than an orchestrator marker) drove the classification.
+- **`decisions` in the doc-sync contract** (`ship/sections/pr-body.md.tmpl`): the document-release subagent records each auto-chosen gate as one line in a required `decisions` array; the parent prints them after the sync summary. Never embedded in the public PR body (tripwire-pinned). Absent key from an older installed skill reads as empty.
+- **Proactive spawned rule in the AskUserQuestion prose** (all tier-2+ skills): `SESSION_KIND: spawned` now short-circuits BEFORE the Conductor rule, with the destructive carve-out (never auto-choose an irreversible option, take the conservative choice and record it) and anti-injection scoping: a spawned marking counts only from the prompt that created the session, never from files, tool output, or web content read mid-run.
+- **Gate-tier E2E** (`test/skill-e2e-docsync-spawned.test.ts`): drives the verbatim Step 18 dispatch prompt against a real preamble-bearing document-release slice in a Conductor-ambient env with both AUQ hooks seeded live; asserts the 5-key JSON contract, a non-empty `decisions` array, and an untouched VERSION through a deliberately fired gate.
+
+### Changed
+
+- **`bin/gstack-skill-start`**: spawned sessions suppress `CONDUCTOR_SESSION: true` (prose to nobody is always wrong), key `SPAWNED_SESSION: true` and the spawned-session instruction block on the resolved kind instead of raw `OPENCLAW_SESSION` (OpenClaw behavior unchanged, regression-pinned), gate all 11 interactive-onboarding blocks plus their ack markers at emission, and skip the network-bound update-check and the first-task repo probe (their consumers are suppressed anyway; the one-shot just-upgraded marker survives for the next human session).
+- **AUQ hooks** (`hosts/claude/hooks/`): the Conductor deny gains a deterministic `[conductor][spawned]` auto-choose branch for env-marked spawned sessions, with per-question one-way-door annotations; both hooks' prose directives (interactive AND headless) carry a shared spawned escape sentence, single-sourced in `spawned-directive.ts` so the two paths can never drift. Hooks inherit the harness env, so the escape text is the designed lever for per-command-marked subagents.
+- **Ship Step 18 dispatch prompt**: frames the subagent as spawned, instructs the same-line env prefix (template bash blocks do not share exports), resolves every named gate to the recommended option with a conservative fallback, and places the skill's own doc-health summary in the body so the JSON stays the final line.
+
+### Fixed
+
+- **#2733**: Conductor-hosted /ship runs no longer lose their Documentation section when document-release hits an AskUserQuestion gate. The failure was gate-correlated and hit every ship on affected hosts.
+
+### For contributors
+
+- Skeleton byte ceilings in `test/helpers/carve-guards.ts` re-ratcheted for the AUQ prose growth (19 skills, measured values in comments); `test/fixtures/context-budget.json` recaptured in the same commit per the ratchet protocol.
+- New `docsync-spawned` selector in touchfiles (deps name every behavior under test) and a matching gate row in `.github/workflows/evals.yml`; `bin/gstack-session-kind` joined the `conductor-prose` and `auto-decide-preserved` selectors (it previously appeared in no dep list).
+- `test/gstack-session-kind.test.ts`, both hook suites, the resolver suite, and the dispatch tripwire gained ~25 cases, including a `spawnedByEnv()`-vs-script parity pin and a cross-surface destructive-policy drift guard.
+
+## [1.75.0.0] - 2026-08-29
+
+**Your review now hunts over-built code, not just broken code.**
+**And every skill's advice starts with "reuse before you build."**
+
+This release imports the best of ponytail, the code-minimalism ruleset, without importing its build-less posture. /review gains an eighth lens: a simplification specialist that flags unrequested structure (hand-rolled stdlib, one-implementation abstractions, dead flexibility, dependencies duplicating platform features) in a closed five-tag vocabulary. It is advisory only. It cannot dent your quality score, its fixes are never auto-applied, and on a lean diff it tells you something no reviewer ever says: "lean already — nothing to cut." Every tier-2+ skill also gains the reuse ladder (stop at the first rung that holds: this repo, stdlib, native platform, an installed dependency... then build the complete version of what remains) and a bounded closer, so completion reports stop touring every edit. Accepted shortcuts now leave a durable trail: a decision-ledger entry plus a `gstack-shortcut(dec-<id>)` marker in code, harvested into a debt ledger by /retro. Agent hosts without a full install (Zed, Amp, Cursor side projects) get a 1.8KB rules digest to copy into their own rules file. And /autoplan now runs the Eng review last, always, so the required shipping gate reviews the final amended plan instead of a stale one.
+
+### The numbers that matter
+
+Source: this branch's own runs, recorded under `~/.gstack/projects/<slug>/evals/` and the commit receipts.
+
+| Metric | Before | After | Δ |
+|---|---|---|---|
+| /review lenses | 7 | 8 (simplification, advisory) | +1 |
+| Simplification lens on this branch's own 5,190-line diff | n/a | `net: -37 lines possible` | dogfooded |
+| AskUserQuestion preamble section, per skill | baseline | -236 B (~9.7 KB across 41 skills) | gated by a live A/B: post-cut 7/7 format elements, substance equal to pre-cut |
+| Instruction-tier artifact for rules-reading hosts | none | 1,765 B committed digest (2,048 B budget) | new |
+| Skills-earn-their-tokens benchmark | none | 3 tasks x 2 arms (with/without skill), judged on the diff left behind | new |
+| /autoplan phase order | CEO, Design, Eng, DX | CEO, Design, DX, Eng always last | the gate sees the final plan |
+
+The A/B receipt is the one to trust: the AskUserQuestion cut only landed because a two-arm eval on real SDK captures showed the shorter render lost nothing (the gate outranked the approval, by design).
+
+### What this means for your workflow
+
+Run /review on a branch you suspect is over-built and read the `[ADVISORY]` rows plus the `net: -N lines possible` footer; nothing blocks, nothing auto-applies, you decide. Take a shortcut in an AskUserQuestion and it stops rotting silently: /retro reads the ledger back to you with its upgrade trigger. If you work in a rules-reading editor without a gstack install, copy `agents-digest/gstack-AGENTS.md` into your rules file and the ethos rides along.
+
+### Itemized changes
+
+### Added
+
+- **Simplification review specialist** (`review/specialists/simplification.md`): closed tag vocabulary (`delete:` / `stdlib:` / `native:` / `speculative:` / `shrink:`), dispatched on diffs over 100 lines, `--simplification` force flag. Advisory carve-out end to end: excluded from the quality score and findings-count header, ASK-only in Fix-First, `[ADVISORY]` labels, parent-printed `net: -N lines possible` footer, and a `Simplification: lean already — nothing to cut.` zero-findings line. Precision guarded by a false-flag fixture (a complete-but-lean diff must yield NO FINDINGS) and coverage-vs-structure boundary text (tests, error paths, and edge cases are never deletion targets).
+- **Reuse ladder in Search Before Building** (every tier-2+ skill): before writing new code, stop at the first rung that holds — a helper already in the repo, the stdlib, a native platform feature, an already-installed dependency — then build the complete version of what remains. Root-cause rule included: one guard in the shared function beats a guard in every caller.
+- **Bounded closer** (every tier-2+ skill): after completing work, report what changed, what was skipped, what to watch — a few short lines, with report-shaped skills (/qa-only, /plan-*-review, /retro, /document-generate) explicitly exempt because their report IS the work.
+- **Shortcut debt ledger**: accepting a Completeness ≤ 7 option on a durable-scope call now logs the ceiling and upgrade trigger to the decision ledger and marks each cut corner with `gstack-shortcut(dec-<id>): <ceiling>, upgrade when <trigger>`; /retro Step 11.5 harvests the markers, joins them on decision ids, and tags `unlinked` and `no-trigger` rot risks. Markers survive the redaction engine (pinned by test).
+- **Instruction-only host tier**: `agents-digest/gstack-AGENTS.md`, a committed, generated, budget-capped (2,048 B) digest of the ethos, reuse ladder, and voice rules. Setup's openclaw/hermes explainer arms print its path for copy-in; setup never writes a user's AGENTS.md (tripwire-tested, including laundered write shapes). README's host table now matches what setup actually does.
+- **With/without-skill arm benchmark** (periodic eval): three build-shaped tasks (a native-platform overbuild trap, a CRUD endpoint, a bugfix with planted decoys) run through real `claude -p` sessions twice — with the behavioral-layer skill installed and without — and the staged diff each arm leaves is judged for over-engineering on a 0-3 rubric with a full failure taxonomy (judge_error cells excluded from aggregates but surfaced; zero-diff arms are valid cells). Each cell also runs the fixture's own functional oracle (`checks=pass|fail|none`), so a refusal, a broken implementation, and working code stay distinguishable — correctness before LOC. A research instrument, not a gate.
+- **/autoplan runs Eng last, always**: mandatory order is now CEO → Design (if UI scope) → DX (if developer-facing scope) → Eng, with a single final approval gate; clearly-wrong premises queue as User-Challenge items instead of stopping mid-run, and accepting one at the gate amends the plan and re-runs Eng on the amended plan. Static test pins the Eng-terminal order.
+
+### Changed
+
+- **AskUserQuestion preamble section slimmed** (-236 B per skill, ~9.7 KB across the corpus): duplicate statements of the completeness rule, auto-decide marker, and tool-not-prose rule removed while keeping every verbosity floor and all 14 format pins. Landed only after a live NOT-WORSE A/B (pre-cut vs post-cut render, identical prompt, SDK capture) showed zero format-element loss and equal recommendation substance.
+- **Terse-mode label tells the truth**: the claimed savings is now the measured 2.6 KB, not "~3-5 KB".
+- `/review` checklist knows Completeness Gaps and Simplification are orthogonal (coverage up, structure down), and a `gstack-shortcut` marker downgrades a would-be gap finding to acknowledged debt — but only when its decision id resolves in the ledger; an orphan marker is reported as a forged suppression (cross-model adversarial catch).
+
+### Fixed
+
+- **Version bumps no longer strand the agents digest**: `gstack-version-bump write --regen-digest` reruns the repo's digest generator in the same mutation (explicit opt-in — a plain `write` never executes repo files it merely finds), and both ship's and land-and-deploy's evidence gates allow-list the digest alongside VERSION. Without this, every release commit of this repo would have failed the freshness CI check.
+- **The free-suite flaky retry can no longer mask real failures**: the retry pass vetoes on ANY unattributable failure evidence (headerless failures, unhandled errors between tests, truncated runs), an empty shard carries an empty failing-files list instead of crashing the retry, and a dead conditional was removed.
+- **Version allocation distrusts laundered git**: `gstack-next-version` consults `ls-remote` only when origin is actually configured, and a configured origin that "successfully" advertises zero heads (the Conductor git shim's failure shape) now falls back to local refs with a loud warning instead of reading an empty queue and reallocating a taken version. Both shim shapes are pinned by regression tests.
+- **Browse temp paths are portable**: local file serving accepts both the browse TEMP_DIR and the OS tmpdir (`TEMP_DIRS` allowlist), while remote serving stays pinned to TEMP_DIR only (the security asymmetry is test-enforced). An untrustable TMPDIR (`/`, `$HOME`, an ancestor of the daemon's cwd) is ignored rather than trusted for the daemon's lifetime.
+- Setup's instruction-tier pointer prints a script-anchored digest path instead of a cwd-relative one that broke when invoked from another directory.
+- /retro's shortcut harvest no longer reports phantom debt from files that merely document the marker convention (placeholder filter + judgment prose).
+- The arm benchmark harvests against a recorded seed commit (immune to agents that commit and push), ignores node_modules, survives multi-megabyte patches, names its judge-diff cap and reports truncation loudly, and wraps untrusted diffs in per-call random sentinels so a faked closing marker cannot steer the judge.
+- The AUQ A/B eval treats a judge failure on either side as inconclusive instead of coercing it to a fake degradation-or-mask, and reads its pre-cut arm from a vendored fixture instead of a branch-local SHA that dies with the branch.
+
+### For contributors
+
+- `bun run test` gains sandbox knobs: `GSTACK_FREE_JOBS` overrides shard count (digits-only, loud on garbage) and `GSTACK_FREE_RETRY_FLAKY=1` opts into one serial retry pass for syscall-supervised sandboxes (default stays OFF — dev boxes should see flakes). `scripts/sandbox-doctor.sh` makes a Vercel/Conductor cloud sandbox run the suite green in one idempotent command (documented in docs/TESTING_INTERNALS.md): atomic git-shim patching with a backup, loud on patch-pattern drift, :99-socket Xvfb detection, dnf-gated installs, and it survives a missing /dev/shm. A failed digest regen now fails `bun run gen:skill-docs` locally instead of deferring the red to CI.
+- The arm-benchmark selftest (fixture integrity, judge plumbing, install asymmetry) now runs FREE in `bun run test` on every PR via `test/arm-benchmark-selftest.test.ts` — the paid periodic instrument can no longer burn money on broken fixtures.
+- Eval-store schema v2: harvest records carry `{insertions, deletions, net}`; `recordE2E` now populates `tokens_used`.
+- Touchfiles dep lists closed gaps (fixtures, judge helper, harness, ship render) and the context-budget ratchet fixture was re-captured, locking the AskUserQuestion reduction so it cannot silently regress.
+- New coverage: TEMP_DIRS widening + remote-serving asymmetry, shortcut-marker writer/harvester grammar joint, sandbox-doctor shell guards, GSTACK_FREE_JOBS parsing, laundered-ls-remote shims, digest freshness/budget/writer tripwires, and a real generator round-trip through the version bump.
+## [1.74.0.0] - 2026-08-29
+
+**Green now means green: every test runs somewhere, provably.**
+**The suites got faster by deleting lies, not by skipping work.**
+
+This release is a full audit and overhaul of gstack's own test and CI system. The audit found the safety net lying in specific ways: three CI eval jobs ran zero tests and passed on every PR, four paid test files could never execute in any lane, the required free-tests check silently skipped nine make-pdf gates on Linux for their entire life, and about 57 E2E files ran in no scheduled lane at all. All of it is fixed, and each fixed class now has a tripwire so it cannot quietly return.
+
+Speed came from structure. The free suite packs shards by recorded per-file durations instead of file counts, and the serial tree-mutating shard is gone entirely: the generator gained a main() guard and renders every host into out-dirs, so the suite never writes the live tree. The paid lane re-platforms CI onto the same sharded runner you use locally, with one planner manifest, sliced executors, and a report that fails closed when a slice's artifact never lands.
+
+### The numbers that matter
+
+Sources: live CI run 33194732051 (pre-change shard timings), the committed durations seed (`bun run test:free --record-durations`, 496 files), and the planner's own output on this branch.
+
+| Metric | Before | After | Δ |
+|---|---|---|---|
+| Free-suite shard spread | 28s to 97s | 6 shards, ~80s predicted each | balanced |
+| Serial mutator tail, every run | ~35-40s | 0s (shard dissolved) | gone |
+| Paid files runnable in NO lane | 4 | 0 | tripwired |
+| E2E files in no weekly CI lane | ~57 | 0 (3 reasoned excludes) | contract |
+| Zero-test green CI jobs per PR | 3 | 0 | deleted |
+| Touchfiles keys missing self-registration | 129 | 0 | enforced |
+| Hand-tuned paid timeout literals | 395 | 97 (46 justified) | 5 tiers |
+
+The self-registration number is the quiet one that matters most: before it, editing only a test's assertions selected nothing, so the changed test never ran on the change that changed it.
+
+### What this means for you
+
+`bun run test` is honest and flat: no hidden slop scan, no serial tail, shards that finish together. Paid CI and local paid runs share one engine, so a shard that never starts, a slice that dies, or a file that self-skips everything is a red check with a name, never a silent pass. When you add a paid test, the orphan tripwire forces it into the census the same commit. Upgrade, run `bun run test:free`, and read `docs/TESTING_INTERNALS.md` if you maintain tests.
+
+### Itemized changes
+
+#### Fixed (what green means)
+- The required free-tests lane builds the gate binaries (`build:gates`) and runs the nine make-pdf e2e gates that silently self-skipped on Linux since they existed; `GSTACK_EXPECT_BINARIES=1` + `ci-prereqs.test.ts` invert the skip polarity in CI so the class cannot return.
+- Deleted the two vestigial eval matrix rows that ran zero tests per PR (codex/gemini, periodic-tier files with no row tier) and armed `e2e-pty-plan-smoke` with its missing `tier: gate` (it burned ~7 minutes of setup then skipped every describe).
+- Activated the four paid test files whose names fell outside the paid globs (net execution zero, forever): carve-section-loading, codex-e2e-plan-format (+ its missing periodic gate), codex-e2e-recommendation-substance, llm-judge-recommendation. New `paid-orphan-tripwire.test.ts` fails the suite on any EVALS-gated file outside the globs.
+- 135 touchfiles keys now name their own declaring test file; the tier-alignment warning became a hard failure with a 4-entry ratchet.
+- Five quarantined browse tests reactivated (two guard the extension's privileged-message security boundary); root cause was stale dev-machine state, proven byte-identical since v1.66.
+- The two `expect(true)` paid stubs are `test.todo` (reported as todo, never pass), keeping their selector surfaces.
+- Five test files stopped assigning `GSTACK_HOME` at module scope (it leaked into every sibling in the shard process); a static tripwire blocks recurrence.
+- Shared `/tmp` artifact paths in six PTY tests became per-test mkdtemps (they collided under retry and parallel worktrees); 18 live-repo `cwd:` sites audited and reason-commented.
+- `restrictDirectoryPermissions` warns and skips symlinked dirs on both platforms (chmod and icacls dereference the link), closing the Windows lane's standing red with a platform-aware regression test.
+- Judges resolve their model through `lib/eval-model.ts` (the global `GSTACK_EVAL_MODEL` override now applies) and retry 429s with jittered exponential backoff instead of one fixed second.
+- Seven 28-minute test timeouts inside 25-minute CI jobs trimmed to the physical ceiling; an `eval-budgets` fit test pins that budgets above the wall cannot come back.
+
+#### Changed (speed and structure)
+- Free suite: duration-aware LPT shard packing from the committed seed (`scripts/free-test-durations.json`, refresh with `bun run test:free --record-durations`), duration-aware wall timeouts, per-shard prediction logging, corrupt-seed fallback to hash sharding. The `--shard` CI-matrix contract is untouched.
+- `TREE_MUTATING` is empty: `gen-skill-docs.ts` gained a `main()` guard (imports never regenerate; pinned by an import-purity test) and `--out-dir` renders every host, so all eight former mutators render into mkdtemps and the four ratchet readers rejoined the parallel shards.
+- Paid runner: full-stream spooling to per-shard log files (no more 30-minute streams held in RAM), shared `runShardChild` lifecycle with the expectedFiles enforcement drift fixed, parent-computed selection propagated to children via `EVALS_SELECTION_JSON` (fail-open), retry parity as literals.
+- Paid CI re-platform (parity phase): evals.yml gains a sliced lane (planner manifest, 6 executors, fail-closed report) running alongside the legacy matrix; evals-periodic.yml runs ALL periodic-tier tests weekly minus the reasoned exclusions in `periodic-exclude-data.ts`, plus a weekly full-gate census and a tracking-issue upsert on red weeks. The hollow-shard guard fails exit-0 shards that executed zero tests under `EVALS_ALL`.
+- 298 paid timeout literals swept onto five named tiers (`test/helpers/eval-budgets.ts`), round-up only.
+- `slop:diff` left `bun run test` (it silently added up to 240s) and runs in quality-gate per PR instead; `/review` keeps its interactive run.
+- The four worst fixed sleeps (300s/30s/30s/20s) became condition polls or stdin-EOF-bound child lifetimes; the parent-watchdog test dropped from 24s to 3.6s with a strictly stronger assertion.
+- CI hygiene: least-privilege permissions on every workflow, one pinned Bun version everywhere (drift-tested), the image-tag triple bound by test, ci-image stops rebuilding identical images on every ship, quality-gate dropped its 74-second full-history checkout, fork-safe concurrency keys, timeouts on every job, windows caches warm-start on lockfile bumps.
+
+#### Added
+- 95 tests for six zero-coverage surfaces: the eval CLI family (eval-list/compare/summary/select), slop-diff, the code-intelligence CLI, browse media-extract and session-cookie-store, and lib/version-source.
+- Policy and tripwire tests: paid-orphan tripwire, GSTACK_HOME module-scope tripwire, bun-version drift, image-tag binding, gen-skill-docs import purity, out-dir byte-identity for external hosts, manifest/slice/report contract, eval-budget fit and ratchet, periodic-exclude policy, selection propagation drift.
+- `test/helpers/run-bin.ts`: one spawnSync wrapper replacing ~36 near-identical local `run()` helpers (first three files migrated; the rest are a filed follow-up).
+
+#### For contributors
+- `docs/TESTING_INTERNALS.md` documents the new runner architecture; CLAUDE.md's testing prose matches it. TODOS.md closes the absorbed backlog items (periodic coverage contract, eval-harness observability, the sidebar trio, which turned out already deleted) and files the follow-ups: legacy matrix deletion after parity, the required-check decision, browse /tmp-namespace hardening, PTY boot-readiness waits, the single typed test registry, and the bun-native LPT swap at the next Bun unpin.
+
+## [1.72.0.0] - 2026-08-28
+
+**"Go register an API key" now drives your real browser.**
+**Aside is the recommended driver, consent asked every single time.**
+
+When a workflow hits a third-party website moment, registering an API key, creating a vendor account, wiring a webhook, gstack now checks for the Aside AI browser and offers to drive it: your real logged-in sessions, no cookie export, no re-auth. You approve each drive per task, by name and by site. Passwords, payment, CAPTCHAs, and identity stay yours; Apple credential creation is never a drive target in any skill. No Aside installed? On a Mac you get one download pointer (aside.com, macOS 15+), once, and gstack's own visible browser remains the fallback everywhere. gstack never runs an installer for you, and a detected binary is never treated as consent.
+
+This release also fixes a real hardening bug: on hosts where the process holds CAP_FOWNER (Docker as root, CI sandboxes), the browse daemon's owner-only chmod could land on `/tmp` itself when a state file was configured there, locking the whole machine's `access(2)` checks out for everyone. The permission code now refuses shared, sticky, symlinked, or foreign-owned directories, warns instead of going silent, and pins the check and the chmod to one inode.
+
+### The numbers that matter
+
+Source: this branch's test runs on a Linux CAP_FOWNER sandbox, plus the eval records under `~/.gstack/projects/<slug>/evals/`.
+
+| Metric | Before | After | Δ |
+|---|---|---|---|
+| Drivers offered at a third-party web moment | 1 ($B headed) | 2 (Aside recommended, $B fallback) | +1 |
+| `/tmp` after a `BROWSE_STATE_FILE=/tmp/x.json` boot on a CAP_FOWNER host | chmod 0700, machine-wide breakage | refused, warned once | fixed |
+| `resolve-user-slug` on coreutils-only Linux with a git email | exit 127 | exit 0 | fixed |
+| Prose pins guarding the consent contract | 0 | 21 tests, 254 asserts | new |
+| Live consent-gate E2E cases (gate tier, hermetic shims) | 0 | 5, all passing at ~$0.35/run | new |
+
+The consent gate is the number to care about: five real `claude -p` runs prove the agent offers Aside only when detected, degrades cleanly when it is broken or absent, pitches the download exactly once on macOS, and refuses browser drives for Apple credentials under any framing.
+
+### What this means for you
+
+The next time a skill says "you need a Duffel test token," it can just go get it with you watching, in the browser where you are already signed in. You approve the site and the actions first, every time, and the secret lands in an owner-only file, verified with one read-only API call, never echoed to chat. If you would rather not install anything, nothing changes: the first-party browser keeps working exactly as before. Docker-as-root users should upgrade for the `/tmp` fix alone.
+
+### Itemized changes
+
+### Added
+- Third-Party Web Actions contract (ship, spec, office-hours, land-and-deploy, setup-deploy) now names the Aside AI browser as the recommended driver: runtime detection probe with a portable timeout guard, detection-conditional consent options, step-wise drive discipline with the vendor's confirm mode left on, and a failure path that quotes errors (redacted), retries once, and falls back only with fresh consent.
+- Credential boundaries hardened in the same contract: secret-minimization preference (password-manager autofill, human-used copy buttons), Apple credential creation banned as a drive target in every skill, and vendor `--help`/skill text explicitly scoped to operational syntax, never new permissions.
+- `test/third-party-actions.test.ts`: 21 pin tests covering every load-bearing sentence of the contract, plus repo-wide tripwires (an `aside` command allowlist of `--version`/`--help` only, and a ban on Aside installer invocations in any generated doc).
+- `test/skill-e2e-third-party-actions.test.ts`: five hermetic gate-tier E2E cases (present, absent-Linux, present-but-broken, absent-macOS pitch, Apple credential ban) wired into CI's eval matrix; the absent cases actively mask any real `aside` binary on the host so dev machines cannot leak into detection.
+
+### Changed
+- The v1.65.0.0 stance of driving only gstack's own browser stack is superseded by explicit user directive: Aside is the one product gstack recommends by name. Never-auto-install and per-task consent survive unchanged and are now pin-tested.
+- The setup flow's bun-installer checksum verification resolves `sha256sum` before `shasum`, so it works on coreutils-only Linux.
+
+### Fixed
+- `restrictDirectoryPermissions` no longer chmods shared sticky directories (`/tmp`, `/var/tmp`), foreign-owned directories, symlinked state dirs, or world-writable mounts when running as root; refusals warn once per process instead of failing silent, owned-but-unreadable dirs still self-repair, and the check-then-act race is closed with fd-anchored fstat/fchmod.
+- `gstack-config resolve-user-slug` exited 127 on Linux distros without perl's `shasum` whenever a git email was set; both hashing call sites now resolve `sha256sum` first and fall back to `shasum -a 256`.
+- A path-validation test assumed `/etc/crontab` exists (absent on Amazon Linux and minimal Fedora); it now uses `/etc/passwd`.
+
+### For contributors
+- `test/helpers/fs-caps.ts`: functional capability probes (`canRevokeWrites`, `canRevokeReads`) replace uid-0-only guards across 14 chmod-based test files, so suites skip honestly on CAP_DAC_OVERRIDE containers instead of asserting revocations the kernel ignores.
+- Five `tpa-*` entries registered across `E2E_TOUCHFILES`/`E2E_TIERS` with template-level deps, the eval matrix row carries `tier: gate`, and `eval:bg:periodic`'s detach timeout rose to 36000s to cover the grown periodic shard census (floor-enforced by test).
+
+## [1.71.0.0] - 2026-08-27
+
+**Every skill invocation just got half the prompt bill.**
+**Same behavior, measured by A/B evals, locked by CI ceilings.**
+
+Every gstack skill pays a fixed prompt cost before doing any work. This release cuts that cost across all 62 skills and pins the wins so they can't creep back. The shared preamble's bash moved into two runtime scripts (`bin/gstack-skill-start`, `bin/gstack-skill-end`) that echo the same STATUS lines the prose always interpreted. One-time onboarding text now appears only when its gate actually fires, emitted as session-bound instruction blocks instead of riding along in every render. Eleven more skills got the section carve and office-hours' existing carve went deeper, taking the carved roster from 9 to 20: heavy reference bodies load on demand at the step that needs them, never before.
+
+### The numbers that matter
+
+Source: `bin/gstack-context-bill --diff` comparing the main render against this branch's render, both regenerated from source.
+
+| Ledger | Before | After | Δ |
+|---|---|---|---|
+| /review eager per invocation | 109.5KB (~26.6K tok) | 53.7KB (~13.0K tok) | −51% |
+| /land-and-deploy eager | 109.8KB | 54.4KB | −50% |
+| /codex eager | 100.0KB | 53.9KB | −46% |
+| Corpus on disk | 6.4MB (~1,651K tok) | 5.4MB (~1,398K tok) | −15% |
+| Repo CLAUDE.md (always-on in dev sessions) | 66.4KB | 44.9KB | −32% |
+
+50 of the 62 installed skills dropped (the rest are fixture/alias entries with no preamble to shed). The smallest real cut is −4,780 tokens per invocation (tier-1 utilities); non-carved tier-2 skills each shed a flat ~20.8KB of preamble. Zero always-on or eager growth anywhere in the diff.
+
+The behavioral proof ran before this shipped: an A/B eval pins the script render against the old inline render, a section-loading eval verifies a real agent Reads each carved section before doing its step (20 skills, data-driven), and the full paid gate passed with the environmental-only baseline. The context-budget ratchet re-captured after every wave, so each ceiling now sits at the new, lower number.
+
+### What this means for you
+
+The agent reads roughly half the boilerplate before starting your task, so first-token latency and per-invocation cost drop across every skill you run. Onboarding prompts you already answered never render again. Nothing else should feel different: if a skill behaves differently than it did on v1.69, that's a bug, and the A/B harness exists to catch it. Run `bun run test` after upgrading; the ratchet will tell you if anything grew.
+
+### Itemized changes
+
+### Added
+- `bin/gstack-skill-start` / `bin/gstack-skill-end`: the preamble and telemetry runtime, replacing ~18KB of inline bash per tier-2+ skill. Emits a `SKILL_START_PROTO: 1` handshake, STATUS lines, and gated one-time onboarding as `GSTACK_INSTRUCTION` blocks bound to a per-run session ID with a random suffix; passthrough output is sanitized so repo or prior-session content can never mint directive blocks or forge the session ID.
+- `bin/gstack-retro-metrics`: deterministic git metrics for /retro (labeled contract, local reads only), replacing inline git/awk in the skill body.
+- Section carves for 11 new skills — review, codex, land-and-deploy, autoplan, spec, setup-gbrain, qa, browse, retro, design-html, design-shotgun — plus a deeper office-hours carve (Phase 2A/2B), each with registered guards, loading scenarios, and recomputed size floors. The design carves force-read their UX doctrine before design work begins.
+- Context-budget ratchet: a free CI test grades the always-on catalog and each skill's per-invocation cost against committed ceilings; growth fails the suite, reductions re-capture and lock.
+- Six reference docs extracted verbatim from the repo CLAUDE.md (browser internals, CHANGELOG format spec, project tree, hermetic-E2E notes, slop-scan guide, OpenClaw publishing), each replaced inline by a short rule plus pointer.
+
+### Changed
+- The AskUserQuestion tool-resolution and 5+-option rules render as a compact branch table keyed on echoed STATUS lines; full split/CJK rules live at absolute install paths read on demand. All 14 mandatory format pins stay in every tier-2+ skeleton.
+- ios-fix, ios-clean, ios-sync, and ios-design-review dropped to preamble tier 2 (they never used the tier-3 sections).
+- The preamble degrades safely on stale installs: missing handshake means safe defaults, deferred onboarding (consent is never lost), and a one-line upgrade hint.
+- The privacy consent gate and telemetry prompt fire only in interactive sessions; spawned and headless runs defer them to the next human session.
+- Hermetic E2E children get seeded onboarding state in their own `GSTACK_HOME`, so evals never burn turns on first-run prompts.
+
+### Fixed
+- The once-daily artifacts pull is now non-interactive and slow-network bounded, so a hung remote can't stall the first skill invocation of the day.
+- Branch names and artifacts-repo state files are sanitized before entering STATUS output and timeline records, closing log-forgery paths via hostile ref names or planted files.
+- Skill-start no longer parses a multi-megabyte `~/.claude.json` on every invocation when no gbrain server is registered.
+
+### For contributors
+- Preamble A/B eval (`skill-e2e-preamble-script-ab`, periodic tier) pins script-render behavior against the pre-consolidation inline render; the carve-section-loading eval covers all 20 carved skills at an honest 480s ceiling.
+- New free tests: skill-start/skill-end contract and behavior (13), retro-metrics (11), onboarding moved-literals tombstone (3 tests pinning 12 literals both directions), context-budget ratchet (7). Parity baseline and ratchet fixtures re-captured; the shrink floor stays (OV8 evaluated).
+- `test/helpers/touchfiles-data.ts`: the runtime scripts joined every dep list that named the moved generators, so diff-based eval selection still fires on script changes.
+
+## [1.70.1.0] - 2026-08-26
+
+**Ship names its documentation subagent at every decision point.**
+**The handoff is now pinned by tests that fail loud if it ever goes quiet.**
+
+`/ship` has dispatched `/document-release` as Step 18 since v0.18.2.0, but the v1.54.0.0 carve moved that step into an on-demand section and the always-loaded skeleton stopped saying "document-release" at any decision point (one mention survived, buried in the re-run checklist). The wiring was intact. The visibility was gone, and nothing tested the handoff. This release restores the visibility and locks it in: the section index, the STOP pointer, the Step 17 handoff line, and a new hoisted doc-sync invariant all name "the /document-release subagent" (subagent-framed on purpose, so an agent dispatches the isolated worker instead of running a weaker inline copy). A free tripwire pins the wording, carve-guard anchors pin each touchpoint independently, and a new gate-tier E2E proves a live agent actually fires the dispatch before creating the PR.
+
+### The numbers that matter
+
+Source: this branch's eval store (`~/.gstack/projects/<slug>/evals/`, runs of `test/skill-e2e-ship-docsync.test.ts`) and `wc -c ship/SKILL.md`.
+
+| Property | Before | After |
+|--------|--------|-------|
+| Doc-sync subagent named in the Claude-host ship workflow body | 0 mentions at any decision point | 4 (section index, STOP pointer, Step 17 handoff, hoisted invariant) |
+| Tests pinning the ship→document-release handoff | none | 5 free tripwire tests + 3 per-touchpoint carve anchors + 1 gate E2E |
+| Live dispatch proof | never measured | 9/9 runs fire the dispatch before PR creation ($0.63-1.04, 234-319s each, sonnet-4-6) |
+| Always-loaded skeleton cost | 91,267 B | 91,764 B (+497 B, cap raised to 92,300) |
+
+Nine out of nine live runs is the line that matters. The E2E asserts on the actual tool-call stream, with a dispatch-specific matcher that a subagent merely quoting section text cannot satisfy, and a timeout-tolerant exit check that never softens the dispatch assert itself.
+
+### What this means for gstack users
+
+When you run `/ship`, the docs sync step is no longer an invisible line in a file the agent may summarize past. It is named at the exact moments the agent decides what to do next, and a merge-blocking test fails if any future edit makes it invisible again. A failed docs subagent still never blocks your ship. Nothing to configure. Upgrade and ship.
+
+### Itemized changes
+
+#### Fixed
+
+- `/ship`'s Claude-host skeleton names "the /document-release subagent" at all three Step 18 decision points (manifest trigger rendering into the section index and STOP pointer, the Step 17 handoff line, and a hoisted doc-sync invariant beside the PR-title invariant). The invariant states the contract plainly: the dispatch itself is never skipped; only a failed subagent is non-blocking.
+
+#### Added
+
+- `test/ship-document-release-dispatch.test.ts`: free tripwire pinning the carved Step 18 contract (imperative, `subagent_type`, JSON return keys, non-blocking clause), the three skeleton touchpoints, the invariant-above-STOP ordering, the E2E matcher's four marker strings, and the inlined Step 18 → Step 19 ordering in the codex/factory goldens.
+- `test/skill-e2e-ship-docsync.test.ts` (`ship-docsync`, gate tier): a live agent runs the sliced Step 17→19 ship tail in a hermetic git fixture; hard assert that an Agent dispatch matching the Step 18 prompt markers appears in the tool-call stream before any `gh pr create`. Fixture fails loud on step-marker drift, pins its git branch against operator config, asserts every setup command, and neutralizes the credential pre-push guard's question branch.
+
+#### For contributors
+
+- Carve-guards ship entry: three non-overlapping per-touchpoint anchors (gerund, imperative, third-person: no anchor subsumes another, so each is independently enforced), the carved imperative pinned to stay carved, skeleton byte cap 91,600 → 92,300 with the measured value recorded.
+- `ship-docsync` registered in `E2E_TOUCHFILES` and `E2E_TIERS` (gate), with a whole-file `describeE2ETier('gate')` self-gate composed with diff selection so the file stays out of the periodic shard census; the tierless `test:evals` invisibility tradeoff is documented in the file header.
+- Internal backlog notes corrected to describe the current Step 18 design (the pre-v1.54 "Step 8.5" prose was still documented as current), plus three deferred follow-ups recorded: a machine-checkable dispatch receipt, the same dispatch-pin treatment for land-and-deploy→canary, and the periodic shard-census ceiling arithmetic.
+
 ## [1.69.0.0] - 2026-08-22
 
 **The silent-failure wave: tools that reported success while doing nothing —**
@@ -1118,7 +4089,7 @@ generation works again. Update gstack and the wave is yours.
   never enters the transcript.
 - The extension denies token/port reads to content scripts and foreign
   extensions, reimplemented for the v1.63 pinned-origin token model.
-  Contributed by @punksterlabs.
+  Contributed by @Mike-E-Log (#1822).
 - diff 9.0.0 (GHSA-73rr-hh4g-fpgx, @genisis0x); OpenAI key file written
   0600-at-create (@bunlongheng); injection-denylist and phone-pattern
   false positives calibrated (@Masashi-Ono0611, @JonasFocus, @abkrim).
@@ -1166,7 +4137,7 @@ generation works again. Update gstack and the wave is yours.
 - All three plan-tune hooks spawn their bins through a shared
   Windows-aware helper (@rafassousa); setup registers the SessionStart
   hook with a bash prefix (@NikhileshNanduri); BROWSE_BIN gets its .exe
-  (@rroojrooj); the polyfill exposes an exited promise (@punksterlabs)
+  (@rroojrooj); the polyfill exposes an exited promise (@habassa5)
   and the CJK terminal issues are gone (double-send fixed by
   @mindsurf0176, full-width font cells by @tomfluff).
 - New Windows regression tests run on windows-latest CI, not just as
@@ -3532,7 +6503,6 @@ If you run `/retro` on a Conductor branch that's been around for a few days, the
 - Defer-doc artifact `~/.gstack-dev/plans/1539-framework-aware-review.md` describes the multi-week framework-aware ORM verification extension (Django/Rails/SQLAlchemy detection, model-introspection helpers, migration-history-aware checks) intentionally deferred from this wave. Promote to active plan when v1.43.0.0 ships and a second high-volume FP report lands on a different framework, or a follow-up retro shows the lighter quoted-line gate doesn't deliver measurable FP reduction.
 - Wave shape preserved from Daegu pattern: ONE bundled PR with bisect commits, atomic squashed commits for `.tmpl` edit + `gen:skill-docs` regen pairs, intermediate verification checkpoints, original contributors credited in commit author + footer. See `[[feedback_one_pr_fix_waves]]` in agent memory.
 
-
 ## [1.43.1.0] - 2026-05-21
 
 ## **Local gbrain PGLite now defaults to Voyage's code-specialized embedding model when `VOYAGE_API_KEY` is set.**
@@ -3580,7 +6550,6 @@ If you have `VOYAGE_API_KEY` set and run `/setup-gbrain` on a fresh machine, `gb
 
 **Regenerated**
 - `setup-gbrain/SKILL.md`, `sync-gbrain/SKILL.md` — refreshed via `bun run gen:skill-docs --host all` after the template edits
-
 
 ## [1.43.0.0] - 2026-05-20
 

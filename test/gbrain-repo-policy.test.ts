@@ -14,6 +14,7 @@
  */
 
 import { describe, test, expect, beforeEach, afterEach } from 'bun:test';
+import { canRevokeReads } from './helpers/fs-caps';
 import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';
@@ -24,10 +25,22 @@ const BIN = path.join(ROOT, 'bin', 'gstack-gbrain-repo-policy');
 
 let tmpHome: string;
 
+function isolateGitRemote(repo: string, url: string): void {
+  const git = (...args: string[]) => {
+    const result = spawnSync('git', args, { cwd: repo, encoding: 'utf8', timeout: 10_000 });
+    expect(result.status).toBe(0);
+    return result.stdout.trim();
+  };
+  expect(git('config', '--get', 'remote.origin.url')).toBe(url);
+  git('config', '--local', `url.${url}.insteadOf`, url);
+  expect(git('remote', 'get-url', 'origin')).toBe(url);
+}
+
 function run(args: string[], opts: { env?: Record<string, string> } = {}) {
   const res = spawnSync(BIN, args, {
     env: { ...process.env, GSTACK_HOME: tmpHome, ...(opts.env || {}) },
     encoding: 'utf-8',
+    timeout: 30_000,
   });
   return {
     stdout: (res.stdout || '').trim(),
@@ -50,6 +63,25 @@ beforeEach(() => {
 
 afterEach(() => {
   fs.rmSync(tmpHome, { recursive: true, force: true });
+});
+
+test('fixture origin isolation overrides a controlled URL rewrite without changing the stored remote', () => {
+  const repo = path.join(tmpHome, 'repo');
+  fs.mkdirSync(repo);
+  const git = (...args: string[]) => {
+    const result = spawnSync('git', args, { cwd: repo, encoding: 'utf8', timeout: 10_000 });
+    expect(result.status).toBe(0);
+    return result.stdout.trim();
+  };
+  const url = 'https://fixture.invalid/org/repo.git';
+  git('init', '-q');
+  git('remote', 'add', 'origin', url);
+  git('config', '--local', 'url.https://mirror.invalid/.insteadOf', 'https://fixture.invalid/');
+  expect(git('config', '--get', 'remote.origin.url')).toBe(url);
+  expect(git('remote', 'get-url', 'origin')).toBe('https://mirror.invalid/org/repo.git');
+  isolateGitRemote(repo, url);
+  expect(git('config', '--get', 'remote.origin.url')).toBe(url);
+  expect(git('remote', 'get-url', 'origin')).toBe(url);
 });
 
 describe('normalize', () => {
@@ -262,6 +294,7 @@ describe('get without arg (auto-detect from current dir)', () => {
         env: { ...process.env, GSTACK_HOME: tmpHome },
         cwd: cwdTmp,
         encoding: 'utf-8',
+        timeout: 30_000,
       });
       expect((res.stdout || '').trim()).toBe('unset');
     } finally {
@@ -287,9 +320,14 @@ describe('gstack-gbrain-sync code stage honors the repo policy (#2140 sync path)
   function makeRepo(): void {
     repoDir = fs.mkdtempSync(path.join(os.tmpdir(), 'gbrain-policy-repo-'));
     const git = (...args: string[]) =>
-      spawnSync('git', args, { cwd: repoDir, encoding: 'utf-8' });
+      spawnSync('git', args, { cwd: repoDir, encoding: 'utf-8', timeout: 30_000 });
     git('init', '-q', '.');
     git('remote', 'add', 'origin', REPO_URL);
+    isolateGitRemote(repoDir, REPO_URL);
+    expect(git('config', '--local', '--unset', `url.${REPO_URL}.insteadOf`).status).toBe(0);
+    git('config', '--local', 'url.https://git.capy.ai/.insteadOf', 'https://github.com/');
+    expect(git('remote', 'get-url', 'origin').stdout.trim()).toBe('https://git.capy.ai/acme/widget.git');
+    expect(git('config', '--get', 'remote.origin.url').stdout.trim()).toBe(REPO_URL);
     fs.writeFileSync(path.join(repoDir, 'README.md'), 'fixture\n');
     git('add', '-A');
     git('-c', 'user.email=t@t', '-c', 'user.name=t', 'commit', '-qm', 'fixture');
@@ -322,6 +360,15 @@ describe('gstack-gbrain-sync code stage honors the repo policy (#2140 sync path)
     if (repoDir) fs.rmSync(repoDir, { recursive: true, force: true });
   });
 
+  test('implicit lookup uses the configured remote rather than its rewritten transport URL', () => {
+    makeRepo();
+    expect(run(['set', REPO_URL, 'deny']).status).toBe(0);
+    const r = spawnSync(BIN, ['get'], { cwd: repoDir, env: { ...process.env, GSTACK_HOME: tmpHome },
+      encoding: 'utf8', timeout: 30_000 });
+    expect(r.status).toBe(0);
+    expect(r.stdout.trim()).toBe('deny');
+  });
+
   test('deny → code stage refuses loudly, exit 1, status refused-policy-deny', () => {
     makeRepo();
     expect(run(['set', REPO_URL, 'deny']).status).toBe(0);
@@ -344,7 +391,7 @@ describe('gstack-gbrain-sync code stage honors the repo policy (#2140 sync path)
   });
 
   test('store exists but unreadable → fail-closed refusal, never bypassed', () => {
-    if (process.platform === 'win32' || process.getuid?.() === 0) return; // chmod semantics differ
+    if (!canRevokeReads()) return; // chmod is advisory here (win32, root, DAC-override containers)
     makeRepo();
     expect(run(['set', REPO_URL, 'deny']).status).toBe(0);
     fs.chmodSync(policyFile(), 0o000);

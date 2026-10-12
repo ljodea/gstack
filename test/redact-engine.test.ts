@@ -48,6 +48,11 @@ describe("HIGH credential patterns", () => {
     ["gitlab.token", "remote: glpat-" + "Ab12Cd34Ef56Gh78Ij90"],
     ["gitlab.token", "trigger glptt-" + "a1b2c3d4e5f6a7b8c9d0e1f2"],
     ["gitlab.token", "deploy gldt-" + "Zy98Xw76Vu54Ts32Rq10"],
+    ["groq.key", "gsk_" + "AbCdEfGhIjKlMnOpQrStUvWxYz0123456789AbCdEfGhIjKlMn"],
+    ["tavily.key", "tvly-" + "AbCdEfGhIjKlMnOpQrStUvWx"],
+    ["tavily.key", "tvly-dev-" + "AbCdEfGhIjKlMnOpQrStUvWx"],
+    ["notion.token", "ntn_" + "AbCdEfGhIjKlMnOpQrStUvWxYz0123456789AbCdEfGh"],
+    ["notion.token", "secret_" + "AbCdEfGhIjKlMnOpQrStUvWxYz0123456789AbCdEfGh"],
     ["huggingface.token", "hf_" + "AbCdEfGhIjKlMnOpQrStUvWxYz012345"],
     ["npm.token", "npm_" + "a1B2c3D4e5F6g7H8i9J0k1L2m3N4o5P6q7R8"],
     ["digitalocean.token", "dop_v1_" + "0123456789abcdef".repeat(4)],
@@ -229,6 +234,55 @@ describe("MEDIUM demoted credential-shaped patterns (TENSION-1)", () => {
     expect(ids(`authToken: ${v}`)).toContain("env.kv"); // (iv) credential camel
     expect(ids(`clientSecret: ${v}`)).toContain("env.kv"); // (iv) credential camel
   });
+  // #3048 — in a TS/JSX file an unquoted value after `:` is a type or an
+  // expression, and a JSX brace of names is an expression. Decided by file
+  // context: the same shapes in .env/YAML (or with no path) are literals.
+  test("env.kv skips TS/JSX source syntax by file context, never by value shape (#3048)", () => {
+    const kv = (text: string, sourcePath?: string) =>
+      scan(text, { repoVisibility: "private", ...(sourcePath ? { sourcePath } : {}) }).findings.some((f) => f.id === "env.kv");
+    const v = "8Fk2pQ9vXz4wL7mN3rT6yB1cD5eG0hJ";
+    const signature = "export async function issueServerCoachItem(\n  db: Pool,\n  session: SessionState,\n  item: IssuedCoachItem,\n): Promise<void> {}";
+    for (const [code, file] of [
+      [signature, "src/coach.ts"],
+      ["interface Props {\n  session: SessionState;\n}", "src/props.ts"],
+      ["key={turn.requestId + turn.role + index}", "src/Turn.tsx"],
+      ["apiKey={settings.apiKey}", "src/Settings.jsx"],
+    ] as const) expect({ code, kv: kv(code, file) }).toEqual({ code, kv: false });
+    for (const [literal, file] of [
+      ["API_KEY=VelvetRiverOrbitSunset;", ".env"],
+      ["password: {RiverStoneAmberCedar}", "config/app.yml"],
+      [signature, undefined],
+      ["  session: SessionState,", "deploy/values.yaml"],
+      [`session: "${v}",`, "src/a.ts"], [`key={${v}}`, "src/A.tsx"], [`API_KEY={${v}}`, "src/A.tsx"],
+      [`key={settings.apiKey + "${v}"}`, "src/A.tsx"], [`key="${v}"`, "src/A.tsx"], [`api_key: ${v}`, ".env"],
+    ] as const) expect({ literal, file, kv: kv(literal, file) }).toEqual({ literal, file, kv: true });
+    const jwt = ["eyJhbGciOiJIUzI1NiJ9", "eyJzdWIiOiIxMjM0NTY3ODkwIn0", "dozjgNryP4J3jVmNHl0w5N_XgL0n3I9PlFUP0THsR8U"].join(".");
+    expect(scan(`token: ${jwt},`, { repoVisibility: "private", sourcePath: "src/auth.ts" }).findings.map((f) => f.id)).toContain("jwt");
+  });
+  // #2912 — a line that READS a secret from the environment holds no secret;
+  // it must not fire (and so must not be masked or withhold a /cso source file).
+  test("env.kv skips exact environment reads (#2912)", () => {
+    for (const line of [
+      'api_key=os.environ["AGENTOPS_API_KEY"]',
+      '        api_key=os.environ["AGENTOPS_API_KEY"]',
+      "LIVEKIT_API_KEY = os.getenv('LIVEKIT_API_KEY')",
+      'token = os.environ.get("GH_TOKEN")',
+      "API_KEY=process.env.OPENAI_API_KEY",
+      "SECRET_KEY=getenv(\"APP_SECRET_KEY\")",
+    ]) {
+      expect(ids(line)).not.toContain("env.kv");
+      expect(redactFindingSpans(`x=1\n${line}\n`, {})).toBe(`x=1\n${line}\n`);
+    }
+  });
+  test("env.kv still fires on real high-entropy keys beside or instead of an env read (#2912 negative controls)", () => {
+    const v = "Zq8vR2mN5tYb7Lc3Wd9K";
+    expect(ids(`SECRET_KEY = os.getenv('DJANGO_SECRET', '${v}')`)).toContain("env.kv");
+    expect(ids(`API_KEY=process.env.OPENAI_API_KEY||"${v}"`)).toContain("env.kv");
+    expect(ids(`API_KEY=os.environ["X"]+"${v}"`)).toContain("env.kv");
+    expect(ids(`API_KEY=os.environ_${v}`)).toContain("env.kv");
+    expect(ids(`API_KEY=getenv${v}`)).toContain("env.kv");
+    expect(ids(`API_KEY="${v}"`)).toContain("env.kv");
+  });
   test("env.kv stays MEDIUM (calibration: generic net, not a blocker)", () => {
     const f = scan("api_key=8Fk2pQ9vXz4wL7mN3rT6yB1cD5eG0hJ", { repoVisibility: "private" })
       .findings.find((x) => x.id === "env.kv");
@@ -261,6 +315,11 @@ describe("#1946 pattern negatives (placeholders never fire)", () => {
   test("short or placeholder shapes don't trip the new HIGH patterns", () => {
     expect(ids("glpat-xxxx")).not.toContain("gitlab.token");
     expect(ids("hf_token")).not.toContain("huggingface.token");
+    expect(ids("gsk_key")).not.toContain("groq.key");
+    expect(ids("tvly-key")).not.toContain("tavily.key");
+    expect(ids("ntn_token")).not.toContain("notion.token");
+    // `secret_` is an ordinary word; only the length makes it a credential.
+    expect(ids("secret_value")).not.toContain("notion.token");
     expect(ids("npm_install")).not.toContain("npm.token");
     expect(ids("dop_v1_short")).not.toContain("digitalocean.token");
     // pem header WITHOUT the GCP JSON shape stays pem.private_key only.
@@ -301,6 +360,28 @@ describe("PII patterns", () => {
     expect(
       scan("bob@acme.co", { repoVisibility: "private", repoPublicEmails: ["bob@acme.co"] }).findings,
     ).toHaveLength(0);
+  });
+  // A git SSH remote's `git@host` is a transport user@host, not a person's
+  // address. Suppressed by URL SHAPE rather than by allowlisting the `git`
+  // local part: a bare `git@` entry would also silently hide a real address
+  // at a domain that merely starts with "git".
+  test("ssh git remotes are not flagged as emails", () => {
+    expect(ids("set :repo_url, 'git@github.com:acme/widgets.git'")).not.toContain(
+      "pii.email",
+    );
+    expect(ids("git clone git@gitlab.com:acme/widgets.git")).not.toContain("pii.email");
+    expect(ids("git@bitbucket.org:acme/widgets.git")).not.toContain("pii.email");
+    expect(ids("git@ssh.dev.azure.com:v3/acme/widgets/widgets")).not.toContain("pii.email");
+    expect(ids("ssh -T git@github.com")).not.toContain("pii.email");
+    // General case: any host in <user>@<host>:<path>.git position.
+    expect(ids("git@git.acme-internal.net:infra/tools.git")).not.toContain("pii.email");
+    expect(ids("ssh://git@scm.acme-internal.net/infra/tools.git")).not.toContain("pii.email");
+  });
+  test("a real address is still flagged, including at a git host", () => {
+    expect(ids("ping alex@github.com about the issue")).toContain("pii.email");
+    // A domain that merely STARTS WITH "git" is not a git host — this is the
+    // case a bare `git@` local-part allowlist would have wrongly suppressed.
+    expect(ids("contact git@gitmail.com for access")).toContain("pii.email");
   });
   test("phone E.164 flags, skips compact timestamps", () => {
     expect(ids("call +14155550123 now")).toContain("pii.phone.e164");
@@ -379,6 +460,15 @@ describe("LOW patterns surface only", () => {
       (x) => x.id === "hygiene.todo",
     );
     expect(f?.tier).toBe("LOW");
+  });
+  test("gstack-shortcut(dec-*) debt marker survives redaction untouched", () => {
+    // The shortcut ledger convention (AskUserQuestion Format / /retro Step 11.5)
+    // ships in commits and PR bodies BY DESIGN — the ledger is the point. It
+    // must not be caught by hygiene.todo's TODO(owner) shape or anything else.
+    const marker =
+      "// gstack-shortcut(dec-a1b2c3): global lock, upgrade when throughput matters";
+    const result = scan(marker, { repoVisibility: "public" });
+    expect(result.findings).toHaveLength(0);
   });
 });
 
@@ -532,23 +622,27 @@ describe("redactFindingSpans — machine-egress masking (#1947)", () => {
     expect(out).toBe("first <REDACTED-aws.access_key> then <REDACTED-github.pat> end");
   });
 
-  test("fails closed (null) when a span cannot be relocated — never raw passthrough", () => {
-    // env.kv's span (the value) starts well past the regex match start (the
-    // var name), so locateSpan's rewind-2 re-exec misses it. The contract is
-    // null → caller drops the whole payload. The one thing that must never
-    // happen is the secret surviving in the output.
+  test("masks an anchored env.kv value rather than withholding the whole payload", () => {
     const secret = "8Fk2pQ9vXz4wL7mN3rT6yB1cD5eG0hJq";
     const out = redactFindingSpans(`API_KEY=${secret}`, { repoVisibility: "private" });
-    if (out !== null) {
-      // If locateSpan ever learns to find context-prefixed spans, masking
-      // must actually mask.
-      expect(out).not.toContain(secret);
-    } else {
-      expect(out).toBeNull();
-    }
+    expect(out).toBe("API_KEY=<REDACTED-env.kv>");
   });
 
-  test("multiline input redacts a finding past the first line (locateSpan line/col path)", () => {
+  test("line/col at boundaries: line start, after blank lines, first char, last unterminated line", () => {
+    const token = "ghp_" + "1234567890abcdefghijklmnopqrstuvwxyz";
+    const at = (text: string) => {
+      const f = scan(text, { repoVisibility: "private" }).findings.find((x) => x.id === "github.pat");
+      expect(f).toBeDefined();
+      return [f!.line, f!.col];
+    };
+    expect(at(`a\nb\n${token} x`)).toEqual([3, 1]);
+    expect(at(`a\n\n\n  ${token}`)).toEqual([4, 3]);
+    expect(at(token)).toEqual([1, 1]);
+    expect(at(`one\r\ntwo ${token}`)).toEqual([2, 5]);
+    expect(redactFindingSpans(`a\nb\n${token} x`, { repoVisibility: "private" })).toBe("a\nb\n<REDACTED-github.pat> x");
+  });
+
+  test("multiline input redacts a finding past the first line (original span map)", () => {
     const token = "ghp_" + "1234567890abcdefghijklmnopqrstuvwxyz";
     const out = redactFindingSpans(`line one\nline two has ${token}\nline three`, {
       repoVisibility: "private",
@@ -596,5 +690,24 @@ describe("taxonomy integrity", () => {
     for (const p of PATTERNS) {
       if (p.autoRedactable) expect(p.redactToken).toBeTruthy();
     }
+  });
+});
+
+describe("#3048: gstack-redact --from-file passes the file's path as scan context", () => {
+  test("the same line is source syntax in a .ts file and a literal in YAML", () => {
+    const fs = require("node:fs") as typeof import("node:fs");
+    const os = require("node:os") as typeof import("node:os");
+    const path = require("node:path") as typeof import("node:path");
+    const { spawnSync } = require("node:child_process") as typeof import("node:child_process");
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "redact-from-file-"));
+    try {
+      const kv = (name: string) => {
+        fs.writeFileSync(path.join(dir, name), "  session: SessionState,\n");
+        const r = spawnSync("bun", [path.join(import.meta.dir, "..", "bin", "gstack-redact"), "--from-file", path.join(dir, name), "--json"], { encoding: "utf8", timeout: 30_000 });
+        return (JSON.parse(r.stdout).findings as Array<{ id: string }>).some((f) => f.id === "env.kv");
+      };
+      expect(kv("coach.ts")).toBe(false);
+      expect(kv("values.yaml")).toBe(true);
+    } finally { fs.rmSync(dir, { recursive: true, force: true }); }
   });
 });

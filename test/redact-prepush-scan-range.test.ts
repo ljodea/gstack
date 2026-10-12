@@ -23,7 +23,7 @@ import { dirname, join } from "path";
 
 let dir: string;
 const run = (args: string[], cwd = dir): string => {
-  const r = spawnSync("git", args, { cwd, encoding: "utf8" });
+  const r = spawnSync("git", args, { cwd, encoding: "utf8", timeout: 30_000 });
   if (r.status !== 0) throw new Error(`git ${args.join(" ")}\n${r.stderr}`);
   return r.stdout ?? "";
 };
@@ -146,7 +146,7 @@ describe("narrowing the range does not narrow coverage", () => {
     run(["push", "-q", "origin", "main"]);
     run(["fetch", "-q", "origin"]);
     run(["checkout", "-q", "feature"]);
-    spawnSync("git", ["merge", "--no-edit", "main"], { cwd: dir, encoding: "utf8" }); // conflicts
+    spawnSync("git", ["merge", "--no-edit", "main"], { cwd: dir, encoding: "utf8", timeout: 30_000 }); // conflicts
     writeFileSync(join(dir, "conflict.txt"), `resolved ${FAKE_AWS_RESOLV}\n`);
     run(["add", "conflict.txt"]);
     run(["commit", "-q", "--no-edit"]);
@@ -178,6 +178,7 @@ describe("S1: exclusion scoped to the push-target remote", () => {
       input: Buffer.from(stdinLines),
       encoding: "utf8",
       env: { ...process.env },
+      timeout: 30_000,
     });
     return { code: r.status ?? 0, stderr: r.stderr ?? "" };
   }
@@ -223,7 +224,7 @@ describe("S1: exclusion scoped to the push-target remote", () => {
     const head = run(["rev-parse", "HEAD"]).trim();
     const { code, stderr } = runHook(
       `refs/heads/feature ${head} refs/heads/feature ${originTip}\n`,
-      ["origin", "file:///ignored"],
+      ["origin", run(["remote", "get-url", "--push", "origin"]).trim()],
     );
     expect(code).toBe(1);
     expect(stderr).toContain("BLOCKED");
@@ -241,7 +242,7 @@ describe("S1: exclusion scoped to the push-target remote", () => {
     const head = run(["rev-parse", "HEAD"]).trim();
     const { code, stderr } = runHook(
       `refs/heads/feature ${head} refs/heads/feature ${originTip}\n`,
-      ["origin", "file:///ignored"],
+      ["origin", run(["remote", "get-url", "--push", "origin"]).trim()],
     );
     expect(stderr).not.toContain("BLOCKED");
     expect(code).toBe(0);
@@ -262,7 +263,7 @@ describe("S1: exclusion scoped to the push-target remote", () => {
     expect(code).toBe(0);
   });
 
-  test("an unconfigured name (URL push) also falls back rather than erroring", () => {
+  test("an unconfigured URL push cannot borrow another remote's published history", () => {
     const { originTip } = buildSecretOnSecondRemote();
     const head = run(["rev-parse", "HEAD"]).trim();
     const url = "file:///not-a-configured-remote";
@@ -270,7 +271,7 @@ describe("S1: exclusion scoped to the push-target remote", () => {
       `refs/heads/feature ${head} refs/heads/feature ${originTip}\n`,
       [url, url],
     );
-    expect(stderr).not.toContain("could not");
-    expect(code).toBe(0);
+    expect(stderr).toContain("aws.access_key");
+    expect(code).toBe(1);
   });
 });

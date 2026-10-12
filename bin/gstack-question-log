@@ -35,17 +35,19 @@ case "$(uname -s)" in
 esac
 eval "$("$SCRIPT_DIR/gstack-slug" 2>/dev/null)"
 # GSTACK_STATE_ROOT takes precedence over GSTACK_HOME (test isolation per D16).
-GSTACK_HOME="${GSTACK_STATE_ROOT:-${GSTACK_HOME:-$HOME/.gstack}}"
+. "$(dirname "$0")/gstack-state-root.sh" 2>/dev/null || { echo "$0: cannot resolve the gstack state root: $(dirname "$0")/gstack-state-root.sh is missing. fix: reinstall with ./setup or /gstack-upgrade (docs/state-root.md)" >&2; exit 1; }
+gstack_state_root_select
+GSTACK_HOME="$_gstack_sr_root"
 mkdir -p "$GSTACK_HOME/projects/$SLUG"
 
 INPUT="$1"
 
 # Validate and enrich from registry.
-TMPERR=$(mktemp)
+TMPERR=$(mktemp "${TMPDIR:-/tmp}/gstack-question-log.XXXXXX") || { echo "gstack-question-log: could not create a temp file in ${TMPDIR:-/tmp}, so the question was not logged. Fix: point TMPDIR at a writable directory." >&2; exit 1; }
 trap 'rm -f "$TMPERR"' EXIT
 set +e
-VALIDATED=$(printf '%s' "$INPUT" | bun -e "
-import { hasInjection } from '$SCRIPT_DIR/../lib/jsonl-store.ts';
+VALIDATED=$(printf '%s' "$INPUT" | GSTACK_LIB_DIR="$SCRIPT_DIR/../lib" bun -e "
+const { hasInjection } = await import(process.env.GSTACK_LIB_DIR + '/jsonl-store.ts');
 const path = require('path');
 const raw = await Bun.stdin.text();
 let j;
@@ -71,7 +73,10 @@ if (!j.question_id || !/^[a-z0-9-]+\$/.test(j.question_id) || j.question_id.leng
 //   'auq-other'        — user picked 'Other' and typed free text (Layer 8)
 //   'auto-decided'     — PreToolUse enforcement hook substituted the answer (T6)
 //   'codex-import-marker' / 'codex-import-pattern' — T9 backfill from Codex
-const ALLOWED_SOURCES = ['agent', 'hook', 'auq-other', 'auto-decided', 'codex-import-marker', 'codex-import-pattern'];
+//   'spawned-env-deny'  — spawned-session AUQ deny (#2733): the model, not a
+//                         human, resolves the gate; tagged so /plan-tune never
+//                         trains on machine picks as if a human made them
+const ALLOWED_SOURCES = ['agent', 'hook', 'auq-other', 'auto-decided', 'codex-import-marker', 'codex-import-pattern', 'spawned-env-deny'];
 if (j.source !== undefined) {
   if (!ALLOWED_SOURCES.includes(j.source)) {
     process.stderr.write('gstack-question-log: invalid source, must be one of: ' + ALLOWED_SOURCES.join(', ') + '\n');

@@ -9,172 +9,195 @@
  * Used by skill:check and CI freshness checks.
  */
 
-import { discoverTemplates, discoverSectionTemplates } from './discover-skills';
-import { writeLlmsTxt } from './gen-llms-txt';
+import { discoverTemplates, discoverSectionTemplates, includesSkill } from './discover-skills';
+import { externalSkillName, extractNameAndDescription } from './external-skill-names';
+export { extractNameAndDescription } from './external-skill-names';
+import { generateLlmsTxt } from './gen-llms-txt';
+import { generateAgentsDigest, DIGEST_RELPATH, DIGEST_BYTE_BUDGET } from './gen-agents-digest';
+import { DOCTOR_COMPONENTS_RELPATH } from './gen-doctor-components';
+import { renderDoctorComponentsSh } from '../lib/doctor-components';
+import { generateDesignChecklistMd } from './resolvers/design-checklist';
+import { DOM_DUMP_SCRIPT, DOM_DUMP_FILE } from '../lib/dom-dump-script';
 import * as fs from 'fs';
 import * as path from 'path';
 import type { Host, TemplateContext } from './resolvers/types';
 import { HOST_PATHS } from './resolvers/types';
 import { RESOLVERS } from './resolvers/index';
-import { ALL_HOST_CONFIGS, ALL_HOST_NAMES, resolveHostArg, getHostConfig } from '../hosts/index';
+import { rewriteCarvedSectionRefs, SKILL_BYTE_CEILING, usesLazySections } from './resolvers/sections';
+import { insertRuntimePreludes } from './resolvers/runtime-root';
+import { ALL_HOST_NAMES, resolveHostArg, getHostConfig } from '../hosts/index';
 import type { HostConfig } from './host-config';
 
 const ROOT = path.resolve(import.meta.dir, '..');
-const DRY_RUN = process.argv.includes('--dry-run');
+import { ALL_MODEL_NAMES, resolveModel, type Model } from './models';
+import { resolveStateRoot } from '../lib/state-root';
+import { mkdirpSync } from '../lib/fs-utils';
 
-// ─── GBrain Detection Override ──────────────────────────────
-// When --respect-detection is passed, read ~/.gstack/gbrain-detection.json
-// and un-suppress GBRAIN_CONTEXT_LOAD + GBRAIN_SAVE_RESULTS for hosts that
-// statically suppress them (claude, codex, slate, factory, opencode,
-// openclaw, cursor, kiro). Detection state is produced by
-// bin/gstack-gbrain-detect and persisted by `gstack-config gbrain-refresh`
-// or by ./setup.
-//
-// Default (no flag): static suppressedResolvers honored as-is. Used by
-// `bun run gen:skill-docs` (CI + canonical checked-in SKILL.md files) so
-// the committed output is reproducible regardless of any developer's
-// local gbrain installation state. Use `bun run gen:skill-docs:user`
-// (which adds --respect-detection) for user-local installs.
-const RESPECT_DETECTION = process.argv.includes('--respect-detection');
+type HostArg = Host | 'all';
 
-function loadGbrainOverride(): { detected: boolean } {
-  if (!RESPECT_DETECTION) return { detected: false };
-  const stateDir = process.env.GSTACK_HOME || path.join(process.env.HOME || '', '.gstack');
-  const detectionPath = path.join(stateDir, 'gbrain-detection.json');
+/** Internal render settings. Inputs always come from ROOT; output routing and
+ * content links are separate so checks can render canonical bytes into scratch. */
+export interface GenerationOptions {
+  host?: HostArg;
+  dryRun?: boolean;
+  outputRoot?: string;
+  contentLinkRoot?: string | null;
+  /** Install-context render contract: absolute install root this render serves. */
+  installRoot?: string | null;
+  /** Skills this install leaves unregistered (gstack-config disabled_skills); the router omits them. */
+  disabledSkills?: string[];
+  model?: Model | null;
+  catalogMode?: 'trim' | 'full';
+  explainLevel?: 'default' | 'terse';
+  respectDetection?: boolean;
+  log?: (message: string) => void;
+}
+
+interface RenderOptions {
+  outputRoot: string;
+  contentLinkRoot: string | null;
+  installRoot: string | null;
+  disabledSkills: string[];
+  model: Model | null;
+  catalogMode: 'trim' | 'full';
+  explainLevel: 'default' | 'terse';
+  gbrainDetected: boolean;
+}
+
+export interface GeneratedArtifact {
+  relativePath: string;
+  kind: 'skill' | 'section' | 'metadata' | 'openclaw' | 'index' | 'digest' | 'doctor-components' | 'asset';
+  host?: Host;
+}
+
+export interface GenerationDiagnostic {
+  kind: 'stale' | 'error' | 'warning' | 'skipped';
+  message: string;
+  host?: Host;
+  relativePath?: string;
+}
+
+export interface GenerationResult {
+  exitCode: 0 | 1;
+  artifacts: GeneratedArtifact[];
+  diagnostics: GenerationDiagnostic[];
+}
+
+/** Canonical generation never reads local detection state unless opted in. */
+function loadGbrainOverride(respectDetection: boolean): boolean {
+  if (!respectDetection) return false;
+  const stateDir = resolveStateRoot();
   try {
-    const json = JSON.parse(fs.readFileSync(detectionPath, 'utf-8')) as { gbrain_local_status?: string };
-    // "timeout" = slow-but-healthy engine (#1964); "thin-client" = remote-HTTP
-    // MCP brain with no local engine by design (#2051); "engine-locked" = same
-    // class (#2456): PGLite is single-writer, so a live `gbrain serve` (e.g.
-    // an MCP server) owns the embedded DB — gbrain is installed and healthy,
-    // a legitimate holder has the lock, so a transient lock must not silently
-    // strip brain blocks from every SKILL.md. All usable — same treatment as
-    // "ok", matching gstack-gbrain-detect --is-ok.
-    const USABLE = ['ok', 'timeout', 'thin-client', 'engine-locked'];
-    return { detected: USABLE.includes(json.gbrain_local_status ?? '') };
+    const json = JSON.parse(fs.readFileSync(path.join(stateDir, 'gbrain-detection.json'), 'utf-8'));
+    // Slow, remote, locked and briefly unreachable engines are still usable (#1964/#2051/#2456, A2).
+    return ['ok', 'timeout', 'db-unreachable', 'thin-client', 'engine-locked'].includes(json.gbrain_local_status ?? '');
   } catch {
-    return { detected: false };
+    return false;
   }
 }
 
-const GBRAIN_OVERRIDE = loadGbrainOverride();
-
-/**
- * Compute effective suppressedResolvers for a host, applying the gbrain
- * detection override when enabled. When the override fires, GBRAIN_*
- * resolvers are removed from the suppression set so they render in the
- * generated SKILL.md.
- */
-function effectiveSuppressedResolvers(hostConfig: HostConfig): Set<string> {
+function effectiveSuppressedResolvers(hostConfig: HostConfig, options: RenderOptions): Set<string> {
   let list = hostConfig.suppressedResolvers || [];
-  if (GBRAIN_OVERRIDE.detected) {
+  if (options.gbrainDetected) {
     list = list.filter(r => r !== 'GBRAIN_CONTEXT_LOAD' && r !== 'GBRAIN_SAVE_RESULTS');
   }
   return new Set(list);
 }
 
-// ─── Host Detection (config-driven) ─────────────────────────
-
-const HOST_ARG = process.argv.find(a => a.startsWith('--host'));
-type HostArg = Host | 'all';
-const HOST_ARG_VAL: HostArg = (() => {
-  if (!HOST_ARG) return 'claude';
-  const val = HOST_ARG.includes('=') ? HOST_ARG.split('=')[1] : process.argv[process.argv.indexOf(HOST_ARG) + 1];
-  if (val === 'all') return 'all';
-  try {
-    return resolveHostArg(val) as Host;
-  } catch {
-    throw new Error(`Unknown host: ${val}. Use ${ALL_HOST_NAMES.join(', ')}, or all.`);
+/** Parse CLI settings only when executing, never when imported by tests/checks. */
+function parseGenerationArgs(args: string[]): GenerationOptions {
+  const value = (flag: string): string | undefined => {
+    const index = args.findIndex(arg => arg === flag || arg.startsWith(`${flag}=`));
+    if (index < 0) return undefined;
+    const arg = args[index];
+    const result = arg.startsWith(`${flag}=`) ? arg.slice(flag.length + 1) : args[index + 1];
+    if (!result || result.startsWith('--')) throw new Error(`${flag} requires a value`);
+    return result;
+  };
+  const hostValue = value('--host') ?? 'claude';
+  const host = hostValue === 'all' ? 'all' : resolveHostArg(hostValue) as Host;
+  const modelValue = value('--model');
+  const model = modelValue === undefined ? null : resolveModel(modelValue);
+  if (modelValue !== undefined && !model) {
+    throw new Error(`Unknown model: ${modelValue}. Use ${ALL_MODEL_NAMES.join(', ')}, or a family variant (e.g., claude-opus-4-7, gpt-5.4-mini, o3).`);
   }
-})();
-
-// For single-host mode, HOST is the host. For --host all, it's set per iteration below.
-let HOST: Host = HOST_ARG_VAL === 'all' ? 'claude' : HOST_ARG_VAL;
-
-// ─── Model Overlay Selection ────────────────────────────────
-// --model is explicit. Without it, each host uses HostConfig.defaultModel.
-// Host defaults are generation fallbacks, not claims that host === model.
-// Missing overlay file → empty string (graceful).
-import { ALL_MODEL_NAMES, resolveModel, type Model } from './models';
-const MODEL_ARG = process.argv.find(a => a.startsWith('--model'));
-const MODEL_ARG_VAL: Model | null = (() => {
-  if (!MODEL_ARG) return null;
-  const val = MODEL_ARG.includes('=') ? MODEL_ARG.split('=')[1] : process.argv[process.argv.indexOf(MODEL_ARG) + 1];
-  const resolved = resolveModel(val);
-  if (!resolved) {
-    throw new Error(`Unknown model: ${val}. Use ${ALL_MODEL_NAMES.join(', ')}, or a family variant (e.g., claude-opus-4-7, gpt-5.4-mini, o3).`);
+  const catalogMode = value('--catalog-mode') ?? 'trim';
+  if (catalogMode !== 'trim' && catalogMode !== 'full') {
+    throw new Error(`Unknown catalog mode: ${catalogMode}. Use 'trim' (default) or 'full'.`);
   }
-  return resolved;
-})();
-
-function generationModelForHost(host: Host): Model {
-  return MODEL_ARG_VAL ?? getHostConfig(host).defaultModel;
+  const explainLevel = value('--explain-level') ?? 'default';
+  if (explainLevel !== 'default' && explainLevel !== 'terse') {
+    throw new Error(`Unknown explain level: ${explainLevel}. Use 'default' or 'terse'.`);
+  }
+  const outDir = value('--out-dir');
+  const linkRoot = value('--link-root');
+  const disabledValue = value('--disabled-skills');
+  const disabledSkills = (disabledValue ?? '').split(/[\s,]+/).filter(Boolean);
+  const badDisabled = disabledSkills.find(n => !/^\/?[a-z0-9-]+$/.test(n));
+  if (badDisabled) throw new Error(`--disabled-skills takes skill names (got ${JSON.stringify(badDisabled)})`);
+  const installRoot = value('--install-root');
+  if (installRoot !== undefined && !INSTALL_ROOT_PATTERN.test(installRoot)) {
+    throw new Error(`--install-root must be an absolute path of letters, digits and . _ - + @ / (got ${JSON.stringify(installRoot)})`);
+  }
+  // Swap-in callers use --link-root for the FINAL serving path (#2692).
+  // Direct --out-dir callers retain their existing links into the render.
+  return {
+    host, model, catalogMode, explainLevel,
+    dryRun: args.includes('--dry-run'),
+    respectDetection: args.includes('--respect-detection'),
+    outputRoot: outDir === undefined ? ROOT : path.resolve(outDir),
+    contentLinkRoot: linkRoot !== undefined ? path.resolve(linkRoot)
+      : outDir !== undefined ? path.resolve(outDir) : null,
+    installRoot: installRoot ?? null,
+    disabledSkills,
+  };
 }
 
-// ─── Catalog Mode (v1.45.0.0 T4) ────────────────────────────
-// 'trim' (default): shorten frontmatter description to lead sentence and
-// move routing/voice prose into a "## When to invoke" body section.
-// 'full': legacy v1.44 behavior — full description stays in frontmatter.
-const CATALOG_MODE_ARG = process.argv.find(a => a.startsWith('--catalog-mode'));
-const CATALOG_MODE: 'trim' | 'full' = (() => {
-  if (!CATALOG_MODE_ARG) return 'trim';
-  const val = CATALOG_MODE_ARG.includes('=')
-    ? CATALOG_MODE_ARG.split('=')[1]
-    : process.argv[process.argv.indexOf(CATALOG_MODE_ARG) + 1];
-  if (val !== 'trim' && val !== 'full') {
-    throw new Error(`Unknown catalog mode: ${val}. Use 'trim' (default) or 'full'.`);
-  }
-  return val;
-})();
-
-// ─── Explain-level Overlay ──────────────────────────────────
-// --explain-level=terse compresses preamble prose (writing-style, completeness,
-// confusion-protocol, context-health) to a single pointer line at gen time.
-// Default keeps the runtime-conditional behavior (sections render unconditionally,
-// the model skips them when EXPLAIN_LEVEL: terse appears in the preamble echo).
-// Opt-in via the build flag so most users get the runtime-flexible default.
-const EXPLAIN_LEVEL_ARG = process.argv.find(a => a.startsWith('--explain-level'));
-const EXPLAIN_LEVEL: 'default' | 'terse' = (() => {
-  if (!EXPLAIN_LEVEL_ARG) return 'default';
-  const val = EXPLAIN_LEVEL_ARG.includes('=')
-    ? EXPLAIN_LEVEL_ARG.split('=')[1]
-    : process.argv[process.argv.indexOf(EXPLAIN_LEVEL_ARG) + 1];
-  if (val !== 'default' && val !== 'terse') {
-    throw new Error(`Unknown explain level: ${val}. Use 'default' or 'terse'.`);
-  }
-  return val;
-})();
-
-// ─── Out-dir (dev workspace render isolation) ───────────────
-// --out-dir <abs-dir> redirects Claude SKILL.md + section output to a separate
-// (untracked) directory instead of writing in place, AND rewrites the literal
-// section-base path (`~/.claude/skills/gstack/<skill>/sections/`) inside the
-// generated content to point at the out-dir, so section Reads resolve to the
-// rendered copy rather than the global install. Used by bin/dev-setup to render
-// the gbrain `:user` variant for a Conductor workspace without dirtying tracked
-// source. Default (unset) = in-place, behavior unchanged. Claude host only.
-const OUT_DIR_ARG = process.argv.find(a => a.startsWith('--out-dir'));
-const OUT_DIR: string | null = (() => {
-  if (!OUT_DIR_ARG) return null;
-  const val = OUT_DIR_ARG.includes('=')
-    ? OUT_DIR_ARG.split('=')[1]
-    : process.argv[process.argv.indexOf(OUT_DIR_ARG) + 1];
-  if (!val) throw new Error('--out-dir requires a directory path');
-  return path.resolve(val);
-})();
+/** Install roots are spliced into shell lines unquoted, so only plain absolute paths. */
+const INSTALL_ROOT_PATTERN = /^\/[A-Za-z0-9_.@+\/-]*$/;
 
 /**
- * When rendering to an out-dir, repoint the literal section-base path at the
- * out-dir so section Reads resolve to the rendered copy, not the global install.
- * Surgical: ONLY paths containing `/sections/` are rewritten — bin/, browse/,
- * docs/ references keep pointing at `~/.claude/skills/gstack` (the global
- * install, which still works). No-op when --out-dir is unset.
+ * Install-context render contract (docs/ADDING_A_HOST.md): a per-install render
+ * names its own install root instead of the host's default global root. Null
+ * keeps the committed bytes.
  */
-function rewriteSectionBase(content: string): string {
-  if (!OUT_DIR) return content;
+function rewriteInstallRoot(content: string, hostConfig: HostConfig, installRoot: string | null): string {
+  if (!installRoot) return content;
+  const root = installRoot.replace(/\/+$/, '');
+  const defaults = hostConfig.usesEnvVars
+    ? [`$HOME/${hostConfig.globalRoot}`, `~/${hostConfig.globalRoot}`]
+    : ['$HOME/.claude/skills/gstack', '~/.claude/skills/gstack'];
+  return defaults.reduce((text, from) => text.split(from).join(root), content);
+}
+
+/**
+ * C8 (#3018): the router names every skill, so it routed to skills the user
+ * disabled (it also said "When in doubt, invoke the skill" until v1.91.31). A per-install render that
+ * knows its disabled skills drops their routing rules (keeping the other side
+ * of an "A or B" rule) and says which skills are off. The router itself and
+ * the way back (gstack-upgrade) can never be disabled.
+ */
+function omitDisabledSkills(content: string, disabled: string[]): string {
+  const off = new Set(disabled.map(n => n.replace(/^\//, '')).filter(n => n !== 'gstack' && n !== 'gstack-upgrade').map(n => n.replace(/^gstack-/, '')));
+  if (off.size === 0) return content;
+  const isOff = (ref: string) => off.has(ref.replace(/^`\/(?:gstack-)?|`$/g, ''));
+  const routed = content.split('\n').flatMap(line => {
+    const m = line.match(/^(- .*→ invoke )(`\/[a-z0-9-]+`(?: or `\/[a-z0-9-]+`)*)(.*)$/);
+    if (!m) return [line];
+    const kept = m[2].split(' or ').filter(ref => !isOff(ref));
+    return kept.length ? [`${m[1]}${kept.join(' or ')}${m[3]}`] : [];
+  }).join('\n');
+  const names = [...off].map(n => `\`/${n}\``).join(', ');
+  return routed.replace('\n## Route first\n', `\n## Route first\n\nDisabled on this install (never invoke or suggest them): ${names}.\n`);
+}
+
+/** Repoint only Claude section links, retaining global bin/browse/doc paths. */
+function rewriteSectionBase(content: string, linkRoot: string | null): string {
+  if (!linkRoot) return content;
+  // Callback replacement preserves literal $ sequences in configured paths.
   return content.replace(
     /~\/\.claude\/skills\/gstack\/([^\s)`"'*]+\/sections\/)/g,
-    `${OUT_DIR}/$1`,
+    (_m, p1: string) => `${linkRoot}/${p1}`,
   );
 }
 
@@ -183,57 +206,6 @@ function rewriteSectionBase(content: string): string {
 // live in ./resolvers/constants and are consumed by resolvers directly.
 
 // ─── External Host Helpers ───────────────────────────────────
-
-// Canonical implementation (the codex-helpers.ts shadow copy was deleted —
-// it was imported, immediately shadowed by this declaration, and stale)
-// Accepts optional frontmatter name to support directory/invocation name divergence
-function externalSkillName(skillDir: string, frontmatterName?: string): string {
-  // Root skill (skillDir === '' or '.') always maps to 'gstack' regardless of frontmatter
-  if (skillDir === '.' || skillDir === '') return 'gstack';
-  // Use frontmatter name when it differs from directory name (e.g., run-tests/ with name: test)
-  const baseName = frontmatterName && frontmatterName !== skillDir ? frontmatterName : skillDir;
-  // Don't double-prefix: gstack-upgrade → gstack-upgrade (not gstack-gstack-upgrade)
-  if (baseName.startsWith('gstack-')) return baseName;
-  return `gstack-${baseName}`;
-}
-
-function extractNameAndDescription(content: string): { name: string; description: string } {
-  const fmStart = content.indexOf('---\n');
-  if (fmStart !== 0) return { name: '', description: '' };
-  const fmEnd = content.indexOf('\n---', fmStart + 4);
-  if (fmEnd === -1) return { name: '', description: '' };
-
-  const frontmatter = content.slice(fmStart + 4, fmEnd);
-  const nameMatch = frontmatter.match(/^name:\s*(.+)$/m);
-  const name = nameMatch ? nameMatch[1].trim() : '';
-
-  let description = '';
-  const lines = frontmatter.split('\n');
-  let inDescription = false;
-  const descLines: string[] = [];
-  for (const line of lines) {
-    if (line.match(/^description:\s*\|?\s*$/)) {
-      inDescription = true;
-      continue;
-    }
-    if (line.match(/^description:\s*\S/)) {
-      description = line.replace(/^description:\s*/, '').trim();
-      break;
-    }
-    if (inDescription) {
-      if (line === '' || line.match(/^\s/)) {
-        descLines.push(line.replace(/^  /, ''));
-      } else {
-        break;
-      }
-    }
-  }
-  if (descLines.length > 0) {
-    description = descLines.join('\n').trim();
-  }
-
-  return { name, description };
-}
 
 // ─── Voice Trigger Processing ────────────────────────────────
 
@@ -559,7 +531,8 @@ function transformFrontmatter(content: string, host: Host): string {
 
   // Build frontmatter with allowed fields
   const indentedDesc = description.split('\n').map(l => `  ${l}`).join('\n');
-  let newFm = `---\nname: ${name}\ndescription: |\n${indentedDesc}\n`;
+  const fmName = fm.nameMatchesDirectory && name !== 'gstack' && !name.startsWith('gstack-') ? `gstack-${name}` : name;
+  let newFm = `---\nname: ${fmName}\ndescription: |\n${indentedDesc}\n`;
 
   // Add extra fields (host-wide)
   if (fm.extraFields) {
@@ -614,8 +587,9 @@ function transformFrontmatter(content: string, host: Host): string {
  * Extract hook descriptions from frontmatter for inline safety prose.
  * Returns a description of what the hooks do, or null if no hooks.
  */
-function extractHookSafetyProse(tmplContent: string): string | null {
+function extractHookSafetyProse(tmplContent: string, hostConfig: HostConfig): string | null {
   if (!tmplContent.match(/^hooks:/m)) return null;
+  if (hostConfig.capabilities.safetyHooks === 'enforced') return null;
 
   // Parse the hook matchers to build a human-readable safety description
   const matchers: string[] = [];
@@ -638,7 +612,7 @@ function extractHookSafetyProse(tmplContent: string): string | null {
     .map(t => toolDescriptions[t] || `check ${t} operations for safety`)
     .join(', and ');
 
-  return `> **Safety Advisory:** This skill includes safety checks that ${safetyChecks}. When using this skill, always pause and verify before executing potentially destructive operations. If uncertain about a command's safety, ask the user for confirmation before proceeding.`;
+  return `> **Safety Advisory — not enforced on ${hostConfig.displayName}:** advisory, not blocked. ${hostConfig.displayName} runs no gstack safety hooks, so nothing stops a command automatically. On Claude Code this skill's hooks ${safetyChecks}; here, do those checks yourself: always pause and verify before executing potentially destructive operations. If uncertain about a command's safety, ask the user for confirmation before proceeding.`;
 }
 
 // ─── External Host Config (now derived from hosts/*.ts) ──────
@@ -697,12 +671,13 @@ function resolvePlaceholders(
   ctx: TemplateContext,
   hostConfig: HostConfig,
   relTmplPath: string,
+  options: RenderOptions,
 ): string {
   assertSinglePreamble(tmplContent, relTmplPath);
   // effectiveSuppressedResolvers() honors --respect-detection: when gbrain is
   // detected locally, GBRAIN_* resolvers un-suppress. Shared by SKILL.md and
   // section generation so both paths get the same gbrain-aware behavior.
-  const suppressed = effectiveSuppressedResolvers(hostConfig);
+  const suppressed = effectiveSuppressedResolvers(hostConfig, options);
   const onePass = (input: string): string =>
     input.replace(/\{\{(\w+(?::[^}]+)?)\}\}/g, (_match, fullKey) => {
       const parts = fullKey.split(':');
@@ -744,6 +719,7 @@ function buildContext(
   tmplContent: string,
   tmplPath: string,
   host: Host,
+  options: RenderOptions,
   skillNameOverride?: string,
 ): TemplateContext {
   const { name: extractedName } = extractNameAndDescription(tmplContent);
@@ -758,7 +734,7 @@ function buildContext(
   const interactive = interactiveMatch ? interactiveMatch[1] === 'true' : undefined;
   return {
     skillName, tmplPath, benefitsFrom, host, paths: HOST_PATHS[host],
-    preambleTier, model: generationModelForHost(host), interactive, explainLevel: EXPLAIN_LEVEL,
+    preambleTier, model: options.model ?? getHostConfig(host).defaultModel, interactive, explainLevel: options.explainLevel, installRoot: options.installRoot,
   };
 }
 
@@ -773,13 +749,14 @@ function processExternalHost(
   skillDir: string,
   extractedDescription: string,
   ctx: TemplateContext,
+  options: RenderOptions,
   frontmatterName?: string,
-): { content: string; outputPath: string; outputDir: string; symlinkLoop: boolean } {
+): { content: string; outputPath: string; symlinkLoop: boolean; metadata?: { outputPath: string; content: string } } {
   const hostConfig = getHostConfig(host);
 
   const name = externalSkillName(skillDir === '.' ? '' : skillDir, frontmatterName);
-  const outputDir = path.join(ROOT, hostConfig.hostSubdir, 'skills', name);
-  fs.mkdirSync(outputDir, { recursive: true });
+  // --out-dir mirrors the host tree (outputs only; inputs read from ROOT).
+  const outputDir = path.join(options.outputRoot, hostConfig.hostSubdir, 'skills', name);
   const outputPath = path.join(outputDir, 'SKILL.md');
 
   // Guard against symlink loops
@@ -787,7 +764,7 @@ function processExternalHost(
   const claudePath = ctx.tmplPath.replace(/\.tmpl$/, '');
   try {
     const resolvedClaude = fs.realpathSync(claudePath);
-    const resolvedExternal = fs.realpathSync(path.dirname(outputPath)) + '/' + path.basename(outputPath);
+    const resolvedExternal = path.join(fs.realpathSync(path.dirname(outputPath)), path.basename(outputPath));
     if (resolvedClaude === resolvedExternal) {
       symlinkLoop = true;
     }
@@ -796,7 +773,7 @@ function processExternalHost(
   }
 
   // Extract hook safety prose BEFORE transforming frontmatter (which strips hooks)
-  const safetyProse = extractHookSafetyProse(tmplContent);
+  const safetyProse = extractHookSafetyProse(tmplContent, hostConfig);
 
   // Transform frontmatter (host-aware)
   let result = transformFrontmatter(content, host);
@@ -812,17 +789,15 @@ function processExternalHost(
   result = applyHostRewrites(result, hostConfig);
 
   // Config-driven: generate metadata (e.g., openai.yaml for Codex)
-  if (hostConfig.generation.generateMetadata && !symlinkLoop) {
-    const agentsDir = path.join(outputDir, 'agents');
-    fs.mkdirSync(agentsDir, { recursive: true });
-    const shortDescription = condenseOpenAIShortDescription(extractedDescription);
-    fs.writeFileSync(path.join(agentsDir, 'openai.yaml'), generateOpenAIYaml(name, shortDescription));
-  }
+  const metadata = hostConfig.generation.generateMetadata && !symlinkLoop ? {
+    outputPath: path.join(outputDir, 'agents', 'openai.yaml'),
+    content: generateOpenAIYaml(name, condenseOpenAIShortDescription(extractedDescription)),
+  } : undefined;
 
-  return { content: result, outputPath, outputDir, symlinkLoop };
+  return { content: result, outputPath, symlinkLoop, metadata };
 }
 
-function processTemplate(tmplPath: string, host: Host = 'claude'): { outputPath: string; content: string; symlinkLoop?: boolean } {
+function processTemplate(tmplPath: string, host: Host, options: RenderOptions): { outputPath: string; content: string; symlinkLoop?: boolean; metadata?: { outputPath: string; content: string } } {
   // Normalize to LF at the entry point. Templates may have CRLF on disk when
   // checked out on Windows with core.autocrlf=true. Downstream regexes
   // (processVoiceTriggers, transformFrontmatter) hardcode \n, so without
@@ -837,10 +812,10 @@ function processTemplate(tmplPath: string, host: Host = 'claude'): { outputPath:
   // Determine skill directory relative to ROOT
   const skillDir = path.relative(ROOT, path.dirname(tmplPath));
 
-  // --out-dir (Claude only): mirror the skill tree into the out-dir instead of
-  // writing in place. External hosts compute their own paths below.
-  if (OUT_DIR && host === 'claude') {
-    outputPath = path.join(OUT_DIR, skillDir, path.basename(tmplPath).replace(/\.tmpl$/, ''));
+  // --out-dir: mirror the skill tree into the out-dir instead of writing in
+  // place (external hosts compute their own output paths below).
+  if (host === 'claude') {
+    outputPath = path.join(options.outputRoot, skillDir, path.basename(tmplPath).replace(/\.tmpl$/, ''));
   }
 
   // Extract name/description: name drives external skill naming + setup symlinks
@@ -850,11 +825,11 @@ function processTemplate(tmplPath: string, host: Host = 'claude'): { outputPath:
   const { name: extractedName, description: extractedDescription } = extractNameAndDescription(tmplContent);
 
   const currentHostConfig = getHostConfig(host);
-  const ctx = buildContext(tmplContent, tmplPath, host);
+  const ctx = buildContext(tmplContent, tmplPath, host, options);
   const skillName = ctx.skillName;
 
   // Replace placeholders + assert none remain (shared path with section generation).
-  let content = resolvePlaceholders(tmplContent, ctx, currentHostConfig, relTmplPath);
+  let content = resolvePlaceholders(tmplContent, ctx, currentHostConfig, relTmplPath, options);
 
   // Preprocess voice triggers: fold into description, strip field from frontmatter.
   // Must run BEFORE transformFrontmatter so all hosts see the updated description,
@@ -868,13 +843,15 @@ function processTemplate(tmplPath: string, host: Host = 'claude'): { outputPath:
   // For Claude: strip sensitive: field (only Factory uses it)
   // For external hosts: route output, transform frontmatter, rewrite paths
   let symlinkLoop = false;
+  let metadata: { outputPath: string; content: string } | undefined;
   if (host === 'claude') {
     content = transformFrontmatter(content, host);
   } else {
-    const result = processExternalHost(content, tmplContent, host, skillDir, postProcessDescription, ctx, extractedName || undefined);
+    const result = processExternalHost(content, tmplContent, host, skillDir, postProcessDescription, ctx, options, extractedName || undefined);
     content = result.content;
     outputPath = result.outputPath;
     symlinkLoop = result.symlinkLoop;
+    metadata = result.metadata;
   }
 
   // Prepend generated header (after frontmatter)
@@ -888,15 +865,17 @@ function processTemplate(tmplPath: string, host: Host = 'claude'): { outputPath:
   }
 
   // Catalog trim (Claude only — external hosts have their own frontmatter shapes)
-  if (host === 'claude' && CATALOG_MODE === 'trim') {
+  if (host === 'claude' && options.catalogMode === 'trim') {
     const trimmed = applyCatalogTrim(content, skillName);
     if (trimmed) content = trimmed.content;
   }
 
   // --out-dir: repoint section-base paths to the out-dir (no-op otherwise).
-  if (host === 'claude') content = rewriteSectionBase(content);
+  if (host === 'claude') content = rewriteSectionBase(content, options.contentLinkRoot);
+  if (skillDir === '' || skillDir === '.') content = omitDisabledSkills(content, options.disabledSkills);
+  content = rewriteInstallRoot(insertRuntimePreludes(rewriteCarvedSectionRefs(content, ctx), ctx), currentHostConfig, options.installRoot);
 
-  return { outputPath, content, symlinkLoop };
+  return { outputPath, content, symlinkLoop, metadata };
 }
 
 /**
@@ -915,7 +894,8 @@ function processTemplate(tmplPath: string, host: Host = 'claude'): { outputPath:
 function processSectionTemplate(
   sectionTmplPath: string,
   skillDir: string,
-  host: Host = 'claude',
+  host: Host,
+  options: RenderOptions,
 ): { outputPath: string; content: string } {
   const tmplContent = fs.readFileSync(sectionTmplPath, 'utf-8');
   const relTmplPath = path.relative(ROOT, sectionTmplPath);
@@ -926,10 +906,10 @@ function processSectionTemplate(
   const parentTmplPath = path.join(ROOT, skillDir, 'SKILL.md.tmpl');
   const parentContent = fs.existsSync(parentTmplPath) ? fs.readFileSync(parentTmplPath, 'utf-8') : '';
   const parentName = (parentContent && extractNameAndDescription(parentContent).name) || skillDir;
-  const ctx = buildContext(parentContent || tmplContent, parentTmplPath, host, parentName);
+  const ctx = buildContext(parentContent || tmplContent, parentTmplPath, host, options, parentName);
 
   // Resolve placeholders against the section body (shared guard catches stragglers).
-  let content = resolvePlaceholders(tmplContent, ctx, hostConfig, relTmplPath);
+  let content = resolvePlaceholders(tmplContent, ctx, hostConfig, relTmplPath, options);
 
   // External hosts: rewrite cross-reference paths/tools (no frontmatter to transform).
   if (host !== 'claude') {
@@ -937,8 +917,9 @@ function processSectionTemplate(
   } else {
     // --out-dir: a section may cross-reference another section by absolute path;
     // repoint those to the out-dir too (no-op when --out-dir is unset).
-    content = rewriteSectionBase(content);
+    content = rewriteSectionBase(content, options.contentLinkRoot);
   }
+  content = rewriteInstallRoot(insertRuntimePreludes(rewriteCarvedSectionRefs(content, ctx), ctx), hostConfig, options.installRoot);
 
   // Plain generated header (no frontmatter to insert after).
   content = GENERATED_HEADER.replace('{{SOURCE}}', path.basename(sectionTmplPath)) + content;
@@ -946,207 +927,251 @@ function processSectionTemplate(
   const fileName = path.basename(sectionTmplPath).replace(/\.tmpl$/, '');
   let outputPath: string;
   if (host === 'claude') {
-    outputPath = path.join(OUT_DIR || ROOT, skillDir, 'sections', fileName);
+    outputPath = path.join(options.outputRoot, skillDir, 'sections', fileName);
   } else {
     const externalName = externalSkillName(skillDir, parentName);
-    outputPath = path.join(ROOT, hostConfig.hostSubdir, 'skills', externalName, 'sections', fileName);
+    outputPath = path.join(options.outputRoot, hostConfig.hostSubdir, 'skills', externalName, 'sections', fileName);
   }
-  if (!DRY_RUN) fs.mkdirSync(path.dirname(outputPath), { recursive: true });
   return { outputPath, content };
 }
 
 // ─── Main ───────────────────────────────────────────────────
 
-function findTemplates(): string[] {
-  return discoverTemplates(ROOT).map(t => path.join(ROOT, t.tmpl));
+/** Render each artifact once. Artifact writes go through emit(); stale external
+ * caches are pruned only after a successful host render. Dry runs use the same
+ * inventory as normal generation, including metadata and
+ * shared outputs. Options are per invocation so imports/concurrent runs cannot
+ * inherit another caller's model, detection, or output paths.
+ *
+ * templates + host settings -> render -> emit -> dry-run: compare only
+ *                                   |       -> normal: mkdir + write
+ * shared index/digest ---------------+       -> artifact inventory + diagnostics
+ * successful external host -----------------> normal only: prune retired caches
+ */
+export async function runGeneration(settings: GenerationOptions = {}): Promise<GenerationResult> {
+  const options: RenderOptions = {
+    outputRoot: path.resolve(settings.outputRoot ?? ROOT),
+    contentLinkRoot: settings.contentLinkRoot ?? null,
+    installRoot: settings.installRoot ?? null,
+    disabledSkills: settings.disabledSkills ?? [],
+    model: settings.model ?? null,
+    catalogMode: settings.catalogMode ?? 'trim',
+    explainLevel: settings.explainLevel ?? 'default',
+    gbrainDetected: loadGbrainOverride(settings.respectDetection ?? false),
+  };
+  const hosts = settings.host === 'all' ? ALL_HOST_NAMES as Host[] : [settings.host ?? 'claude'];
+  const log = settings.log ?? (() => {});
+  const artifacts: GeneratedArtifact[] = [];
+  const diagnostics: GenerationDiagnostic[] = [];
+  const templates = discoverTemplates(ROOT);
+  const sections = discoverSectionTemplates(ROOT);
+  const rel = (outputPath: string) => path.relative(options.outputRoot, outputPath).split(path.sep).join('/');
+
+  function emit(outputPath: string, content: string, kind: GeneratedArtifact['kind'], host?: Host): void {
+    const relativePath = rel(outputPath);
+    artifacts.push({ relativePath, kind, ...(host ? { host } : {}) });
+    try {
+      if (settings.dryRun) {
+        let existing: string | undefined;
+        try {
+          existing = fs.readFileSync(outputPath, 'utf-8');
+        } catch (error) {
+          if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+          // Windows reports ENOENT for a child of a regular file. Distinguish
+          // that filesystem error from a missing artifact without writing.
+          let parent = path.dirname(outputPath);
+          while (true) {
+            try {
+              if (!fs.statSync(parent).isDirectory()) {
+                throw Object.assign(new Error(`ENOTDIR: output ancestor is not a directory: ${parent}`, { cause: error }), { code: 'ENOTDIR' });
+              }
+              break;
+            } catch (ancestorError) {
+              if ((ancestorError as NodeJS.ErrnoException).code !== 'ENOENT') throw ancestorError;
+              const next = path.dirname(parent);
+              if (next === parent) throw error;
+              parent = next;
+            }
+          }
+        }
+        if (existing !== content) {
+          diagnostics.push({ kind: 'stale', relativePath, host, message: `STALE: ${relativePath}` });
+          log(`STALE: ${relativePath}`);
+        } else {
+          log(`FRESH: ${relativePath}`);
+        }
+      } else {
+        mkdirpSync(path.dirname(outputPath));
+        fs.writeFileSync(outputPath, content);
+        log(`GENERATED: ${relativePath}`);
+      }
+    } catch (error) {
+      throw Object.assign(new Error(`${relativePath}: ${(error as Error).message}`), { relativePath });
+    }
+  }
+
+  function failed(error: unknown, host?: Host): void {
+    const message = error instanceof Error ? error.message : String(error);
+    diagnostics.push({ kind: 'error', host, message, relativePath: (error as { relativePath?: string })?.relativePath });
+  }
+
+  for (const host of hosts) {
+    try {
+      const hostConfig = getHostConfig(host);
+      const tokenBudget: Array<{ skill: string; lines: number; tokens: number }> = [];
+      const renderedNames = new Set<string>();
+      for (const template of templates) {
+        const skillDir = path.dirname(template.tmpl);
+        if (!includesSkill(hostConfig, skillDir)) continue;
+        const result = processTemplate(path.join(ROOT, template.tmpl), host, options);
+        const relativePath = rel(result.outputPath);
+        if (host !== 'claude') renderedNames.add(path.basename(path.dirname(result.outputPath)));
+        if (result.symlinkLoop) {
+          diagnostics.push({ kind: 'skipped', relativePath, host, message: `SKIPPED (symlink loop): ${relativePath}` });
+          log(`SKIPPED (symlink loop): ${relativePath}`);
+          continue;
+        }
+        emit(result.outputPath, result.content, 'skill', host);
+        if (result.metadata) emit(result.metadata.outputPath, result.metadata.content, 'metadata', host);
+        if (skillDir === 'qa') {
+          const report = fs.readFileSync(path.join(ROOT, 'qa', 'templates', 'functional-report-template.md'), 'utf-8');
+          emit(path.join(path.dirname(result.outputPath), 'templates', 'functional-report-template.md'),
+            (host === 'claude' ? '' : GENERATED_HEADER.replace('{{SOURCE}}', 'qa/templates/functional-report-template.md')) + report, 'asset', host);
+        }
+        tokenBudget.push({ skill: relativePath, lines: result.content.split('\n').length, tokens: Math.round(result.content.length / 4) });
+        const bytes = Buffer.byteLength(result.content, 'utf8');
+        if (bytes > SKILL_BYTE_CEILING) {
+          // Setup renders per install (--install-root): an oversized skill must never leave a user with none.
+          const message = `${host}/${path.basename(path.dirname(result.outputPath))}/SKILL.md is ${bytes} bytes, over the ${SKILL_BYTE_CEILING.toLocaleString('en-US')}-byte limit. Fix: carve sections with usesLazySections() for this skill.`;
+          diagnostics.push({ kind: options.installRoot ? 'warning' : 'error', host, relativePath, message });
+        }
+      }
+
+      for (const section of sections) {
+        if (!includesSkill(hostConfig, section.skillDir) || !usesLazySections(host, section.skillDir)) continue;
+        const result = processSectionTemplate(path.join(ROOT, section.tmpl), section.skillDir, host, options);
+        emit(result.outputPath, result.content, 'section', host);
+        tokenBudget.push({ skill: rel(result.outputPath), lines: result.content.split('\n').length, tokens: Math.round(result.content.length / 4) });
+      }
+
+      // Claude owns these catalog-derived runtime assets. Use the same host
+      // inclusion rule and compare-or-write path as every other artifact.
+      if (host === 'claude' && includesSkill(hostConfig, 'review')) {
+        emit(path.join(options.outputRoot, 'review', 'design-checklist.md'),
+          generateDesignChecklistMd(), 'asset', host);
+        emit(path.join(options.outputRoot, DOM_DUMP_FILE), DOM_DUMP_SCRIPT + '\n', 'asset', host);
+      }
+
+      if (host === 'openclaw') {
+        for (const variant of ['lite', 'full', 'plan'] as const) {
+          const fileName = `gstack-${variant}-CLAUDE.md`;
+          emit(path.join(options.outputRoot, 'openclaw', fileName),
+            fs.readFileSync(path.join(ROOT, 'openclaw', 'templates', fileName), 'utf-8'), 'openclaw', host);
+        }
+      }
+
+      // A failed render exits this try before pruning: its inventory is partial.
+      // Only remove generated directories owned by this host; sidecars and user
+      // skills survive. Dry runs never create, rewrite, or remove any directory.
+      if (!settings.dryRun && host !== 'claude') {
+        const skillsRoot = path.join(options.outputRoot, hostConfig.hostSubdir, 'skills');
+        let entries: fs.Dirent[] = [];
+        try {
+          entries = fs.readdirSync(skillsRoot, { withFileTypes: true });
+        } catch (error) {
+          if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+        }
+        for (const entry of entries) {
+          if (entry.isSymbolicLink() || !entry.isDirectory() || !entry.name.startsWith('gstack-') || renderedNames.has(entry.name)) continue;
+          // Keep the old render usable until setup has migrated installed copies/links.
+          if (entry.name === 'gstack-claude' && process.env.GSTACK_DEFER_CLAUDE_RENAME_PRUNE === '1') continue;
+          let generated = false;
+          try {
+            generated = fs.readFileSync(path.join(skillsRoot, entry.name, 'SKILL.md'), 'utf-8').includes('<!-- AUTO-GENERATED from');
+          } catch (error) {
+            if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+          }
+          if (!generated) {
+            log(`  kept ${host} skills/${entry.name}: not a gstack render (no generated banner)`);
+            continue;
+          }
+          fs.rmSync(path.join(skillsRoot, entry.name), { recursive: true, force: true });
+          log(`  pruned stale ${host} render: ${entry.name}`);
+          if (entry.name === 'gstack-claude') {
+            log('  /claude is now /claude-code. Run ./setup to migrate installed skill links; generation only updates render files.');
+          }
+        }
+      }
+
+      if (!settings.dryRun && tokenBudget.length > 0) {
+        tokenBudget.sort((a, b) => b.lines - a.lines);
+        log(`\nToken Budget (${host} host)`);
+        log('═'.repeat(60));
+        for (const item of tokenBudget) {
+          const name = item.skill.replace(/\/SKILL\.md$/, '').replace(`${hostConfig.hostSubdir}/skills/`, '');
+          log(`  ${name.padEnd(30)} ${String(item.lines).padStart(5)} lines  ~${String(item.tokens).padStart(6)} tokens`);
+        }
+        log('─'.repeat(60));
+        log(`  ${'TOTAL'.padEnd(30)} ${String(tokenBudget.reduce((sum, t) => sum + t.lines, 0)).padStart(5)} lines  ~${String(tokenBudget.reduce((sum, t) => sum + t.tokens, 0)).padStart(6)} tokens\n`);
+      }
+    } catch (error) {
+      failed(error, host);
+    }
+  }
+
+  // Shared artifacts are awaited in both modes. A failure must reach the CLI
+  // exit code, never disappear in a fire-and-forget auxiliary writer.
+  try {
+    const index = await generateLlmsTxt();
+    emit(path.join(options.outputRoot, 'gstack', 'llms.txt'), index.content, 'index');
+    for (const warning of index.warnings) diagnostics.push({ kind: 'warning', message: `[gen-llms-txt] ${warning}` });
+  } catch (error) {
+    failed(error);
+  }
+  try {
+    const digest = generateAgentsDigest();
+    emit(path.join(options.outputRoot, DIGEST_RELPATH), digest.content, 'digest');
+    if (!settings.dryRun) log(`[gen-agents-digest] ${DIGEST_RELPATH}: ${digest.bytes} bytes (budget ${DIGEST_BYTE_BUDGET})`);
+  } catch (error) {
+    failed(error);
+  }
+  try {
+    emit(path.join(options.outputRoot, DOCTOR_COMPONENTS_RELPATH), renderDoctorComponentsSh(), 'doctor-components');
+  } catch (error) {
+    failed(error);
+  }
+
+  return { exitCode: diagnostics.some(d => d.kind === 'error' || d.kind === 'stale') ? 1 : 0, artifacts, diagnostics };
 }
 
-const ALL_HOSTS: Host[] = ALL_HOST_NAMES as Host[];
-const hostsToRun: Host[] = HOST_ARG_VAL === 'all' ? ALL_HOSTS : [HOST];
-const failures: { host: string; error: Error }[] = [];
-
-for (const currentHost of hostsToRun) {
-  HOST = currentHost;
-
+/** Importing this module never executes generation or reads CLI/user settings.
+ * Async main is require()-compatible: only top-level await would break callers. */
+export async function main(args = process.argv.slice(2)): Promise<number> {
   try {
-    let hasChanges = false;
-    const tokenBudget: Array<{ skill: string; lines: number; tokens: number }> = [];
-
-    const currentHostConfig = getHostConfig(currentHost);
-    for (const tmplPath of findTemplates()) {
-      const dir = path.basename(path.dirname(tmplPath));
-
-      // includeSkills allowlist (union logic: include minus skip)
-      if (currentHostConfig.generation.includeSkills?.length) {
-        if (!currentHostConfig.generation.includeSkills.includes(dir)) continue;
-      }
-      // skipSkills denylist (subtracts from includeSkills or full set)
-      if (currentHostConfig.generation.skipSkills?.length) {
-        if (currentHostConfig.generation.skipSkills.includes(dir)) continue;
-      }
-
-      const { outputPath, content, symlinkLoop } = processTemplate(tmplPath, currentHost);
-      const relOutput = path.relative(OUT_DIR || ROOT, outputPath);
-
-      if (symlinkLoop) {
-        console.log(`SKIPPED (symlink loop): ${relOutput}`);
-      } else if (DRY_RUN) {
-        const existing = fs.existsSync(outputPath) ? fs.readFileSync(outputPath, 'utf-8') : '';
-        if (existing !== content) {
-          console.log(`STALE: ${relOutput}`);
-          hasChanges = true;
-        } else {
-          console.log(`FRESH: ${relOutput}`);
+    const settings = parseGenerationArgs(args);
+    const result = await runGeneration({ ...settings, log: console.log });
+    for (const diagnostic of result.diagnostics) {
+      if (diagnostic.kind === 'error') console.error(`ERROR${diagnostic.host ? ` (${diagnostic.host})` : ''}: ${diagnostic.message}`);
+      if (diagnostic.kind === 'warning') console.error(diagnostic.message);
+    }
+    if (result.diagnostics.some(d => d.kind === 'stale')) {
+      console.error(`\nGenerated files are stale. Run: bun run gen:skill-docs --host ${settings.host ?? 'claude'}`);
+    }
+    if (!settings.dryRun) {
+      try {
+        const config = fs.readFileSync(path.join(resolveStateRoot(), 'config.yaml'), 'utf-8');
+        if (/^skill_prefix:\s*true/m.test(config)) {
+          console.log('\nNote: skill_prefix is true. Run gstack-relink to re-apply name: patches (it patches both the install and any active gbrain render).');
         }
-      } else {
-        // In-place writes land in existing dirs; --out-dir needs the mirrored
-        // skill dir created first.
-        if (OUT_DIR) fs.mkdirSync(path.dirname(outputPath), { recursive: true });
-        fs.writeFileSync(outputPath, content);
-        console.log(`GENERATED: ${relOutput}`);
-      }
-
-      // Track token budget
-      const lines = content.split('\n').length;
-      const tokens = Math.round(content.length / 4); // ~4 chars per token
-      tokenBudget.push({ skill: relOutput, lines, tokens });
-
-      // Token ceiling check: warn if any generated SKILL.md exceeds ~40K tokens (160KB).
-      // The ceiling is a "watch for feature bloat" guardrail, not a hard gate. Modern
-      // flagship models have 200K-1M context windows, so 40K (4-20% of window) is fine.
-      // Prompt caching further reduces the marginal cost of larger skills. This ceiling
-      // exists to catch a runaway preamble or resolver that's grown by 10K+ tokens in
-      // a release, not to force compression on carefully-tuned big skills (ship,
-      // plan-ceo-review, office-hours all legitimately pack 25-35K tokens of behavior).
-      const TOKEN_CEILING_BYTES = 160_000;
-      if (content.length > TOKEN_CEILING_BYTES) {
-        console.warn(`⚠️  TOKEN CEILING: ${relOutput} is ${content.length} bytes (~${tokens} tokens), exceeds ${TOKEN_CEILING_BYTES} byte ceiling (~40K tokens)`);
-      }
+      } catch { /* optional local install note */ }
     }
-
-    // ─── Section generation (v2 plan T9, Claude-first carve) ───
-    // On-demand sections/*.md for carved skills. Generated for CLAUDE ONLY:
-    // every other host inlines section content via the {{SECTION:id}} resolver
-    // (keeping the full monolith skill), so they need no section files and we
-    // sidestep host-portable section paths until that plumbing lands. No-op for
-    // any skill without a sections/ dir. Mirrors the SKILL.md DRY_RUN handling so
-    // sections participate in the freshness gate.
-    for (const sec of currentHost === 'claude' ? discoverSectionTemplates(ROOT) : []) {
-      if (currentHostConfig.generation.includeSkills?.length &&
-          !currentHostConfig.generation.includeSkills.includes(sec.skillDir)) continue;
-      if (currentHostConfig.generation.skipSkills?.length &&
-          currentHostConfig.generation.skipSkills.includes(sec.skillDir)) continue;
-
-      const { outputPath, content } = processSectionTemplate(path.join(ROOT, sec.tmpl), sec.skillDir, currentHost);
-      const relOutput = path.relative(OUT_DIR || ROOT, outputPath);
-
-      if (DRY_RUN) {
-        const existing = fs.existsSync(outputPath) ? fs.readFileSync(outputPath, 'utf-8') : '';
-        if (existing !== content) {
-          console.log(`STALE: ${relOutput}`);
-          hasChanges = true;
-        } else {
-          console.log(`FRESH: ${relOutput}`);
-        }
-      } else {
-        fs.writeFileSync(outputPath, content);
-        console.log(`GENERATED: ${relOutput}`);
-      }
-
-      tokenBudget.push({
-        skill: relOutput,
-        lines: content.split('\n').length,
-        tokens: Math.round(content.length / 4),
-      });
-    }
-
-    // Generate the OpenClaw orchestrator-injection docs (gstack-lite / gstack-full /
-    // gstack-plan CLAUDE.md snippets). Sources live in openclaw/templates/ —
-    // plain markdown, no placeholder resolution — and are copied byte-for-byte
-    // to openclaw/ at gen time.
-    if (currentHost === 'openclaw' && !DRY_RUN) {
-      const openclawDir = path.join(ROOT, 'openclaw');
-      const openclawTemplatesDir = path.join(openclawDir, 'templates');
-      for (const variant of ['lite', 'full', 'plan'] as const) {
-        const fileName = `gstack-${variant}-CLAUDE.md`;
-        const content = fs.readFileSync(path.join(openclawTemplatesDir, fileName), 'utf-8');
-        fs.writeFileSync(path.join(openclawDir, fileName), content);
-        console.log(`GENERATED: openclaw/${fileName}`);
-      }
-    }
-
-    if (DRY_RUN && hasChanges) {
-      console.error(`\nGenerated SKILL.md files are stale (${currentHost} host). Run: bun run gen:skill-docs --host ${currentHost}`);
-      if (HOST_ARG_VAL !== 'all') process.exit(1);
-      failures.push({ host: currentHost, error: new Error('Stale files detected') });
-    }
-
-    // Print token budget summary
-    if (!DRY_RUN && tokenBudget.length > 0) {
-      tokenBudget.sort((a, b) => b.lines - a.lines);
-      const totalLines = tokenBudget.reduce((s, t) => s + t.lines, 0);
-      const totalTokens = tokenBudget.reduce((s, t) => s + t.tokens, 0);
-
-      console.log('');
-      console.log(`Token Budget (${currentHost} host)`);
-      console.log('═'.repeat(60));
-      for (const t of tokenBudget) {
-        const hostSubdirs = ALL_HOST_CONFIGS.map(c => c.hostSubdir.replace('.', '\\.')).join('|');
-        const name = t.skill.replace(/\/SKILL\.md$/, '').replace(new RegExp(`^\\.(${hostSubdirs})\\/skills\\/`), '');
-        console.log(`  ${name.padEnd(30)} ${String(t.lines).padStart(5)} lines  ~${String(t.tokens).padStart(6)} tokens`);
-      }
-      console.log('─'.repeat(60));
-      console.log(`  ${'TOTAL'.padEnd(30)} ${String(totalLines).padStart(5)} lines  ~${String(totalTokens).padStart(6)} tokens`);
-      console.log('');
-    }
-  } catch (e) {
-    failures.push({ host: currentHost, error: e as Error });
-    console.error(`WARNING: ${currentHost} generation failed: ${(e as Error).message}`);
+    return result.exitCode;
+  } catch (error) {
+    console.error(`ERROR: ${(error as Error).message}`);
+    return 1;
   }
 }
 
-// --host all: any host failure fails the build. Previously only claude failures
-// exited nonzero, which let a stale or broken external-host output (e.g. a
-// section that failed to generate for Factory) slip through the freshness gate
-// silently. With sections fanned out across every host, "all hosts regenerated
-// in the same commit" is only a real gate if every host failure is fatal here.
-if (failures.length > 0 && HOST_ARG_VAL === 'all') {
-  console.error(`\n${failures.length} host(s) failed: ${failures.map(f => f.host).join(', ')}`);
-  process.exit(1);
-}
-// Single host dry-run failure already handled above
-
-// After all hosts processed, warn if prefix patches may need re-applying
-if (!DRY_RUN) {
-  try {
-    const configPath = path.join(process.env.HOME || '', '.gstack', 'config.yaml');
-    if (fs.existsSync(configPath)) {
-      const config = fs.readFileSync(configPath, 'utf-8');
-      if (/^skill_prefix:\s*true/m.test(config)) {
-        console.log('\nNote: skill_prefix is true. Run gstack-relink to re-apply name: patches.');
-      }
-    }
-  } catch { /* non-fatal */ }
-}
-
-// Regenerate gstack/llms.txt — single-file capability index for AI agents.
-// Runs after SKILL.md generation so it sees current skill descriptions and
-// browse command list. Wrapped in an IIFE so the await-import doesn't make
-// this module async (test/gen-skill-docs.test.ts uses require() to pull
-// extractVoiceTriggers/processVoiceTriggers, which fails on async modules).
-// Freshness is asserted in test/llms-txt-shape.test.ts.
-if (!DRY_RUN) {
-  void (async () => {
-    try {
-      const result = await writeLlmsTxt();
-      if (result.warnings.length > 0) {
-        for (const w of result.warnings) console.error(`[gen-llms-txt] WARN: ${w}`);
-      } else {
-        console.log(`[gen-llms-txt] gstack/llms.txt: ${result.skills.length} skills, ${result.browseCommands.length} browse commands`);
-      }
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
-      console.error(`[gen-llms-txt] FAILED: ${msg}`);
-    }
-  })();
+if (import.meta.main) {
+  void main().then(code => { process.exitCode = code; });
 }

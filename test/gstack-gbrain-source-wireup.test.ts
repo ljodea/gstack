@@ -145,6 +145,7 @@ function run(
     env,
     encoding: 'utf-8',
     cwd: ROOT,
+    timeout: 30_000,
   });
 }
 
@@ -163,13 +164,13 @@ function gbrainCalls(): string[] {
 function setupGstackRepo(remoteUrl: string) {
   // Real git repo at gstackHome with at least one commit + an origin remote.
   fs.mkdirSync(gstackHome, { recursive: true });
-  spawnSync('git', ['-C', gstackHome, 'init', '-q', '-b', 'main'], { stdio: 'pipe' });
-  spawnSync('git', ['-C', gstackHome, 'config', 'user.email', 'test@example.com'], { stdio: 'pipe' });
-  spawnSync('git', ['-C', gstackHome, 'config', 'user.name', 'test'], { stdio: 'pipe' });
+  spawnSync('git', ['-C', gstackHome, 'init', '-q', '-b', 'main'], { stdio: 'pipe', timeout: 30_000 });
+  spawnSync('git', ['-C', gstackHome, 'config', 'user.email', 'test@example.com'], { stdio: 'pipe', timeout: 30_000 });
+  spawnSync('git', ['-C', gstackHome, 'config', 'user.name', 'test'], { stdio: 'pipe', timeout: 30_000 });
   fs.writeFileSync(path.join(gstackHome, '.brain-allowlist'), '# allowlist\n');
-  spawnSync('git', ['-C', gstackHome, 'add', '.'], { stdio: 'pipe' });
-  spawnSync('git', ['-C', gstackHome, 'commit', '-q', '-m', 'init'], { stdio: 'pipe' });
-  spawnSync('git', ['-C', gstackHome, 'remote', 'add', 'origin', remoteUrl], { stdio: 'pipe' });
+  spawnSync('git', ['-C', gstackHome, 'add', '.'], { stdio: 'pipe', timeout: 30_000 });
+  spawnSync('git', ['-C', gstackHome, 'commit', '-q', '-m', 'init'], { stdio: 'pipe', timeout: 30_000 });
+  spawnSync('git', ['-C', gstackHome, 'remote', 'add', 'origin', remoteUrl], { stdio: 'pipe', timeout: 30_000 });
 }
 
 beforeEach(() => {
@@ -316,6 +317,7 @@ describe('gstack-gbrain-source-wireup — wireup mode', () => {
     const check = spawnSync('bash', ['-c', `command -v gbrain && gbrain --version`], {
       env: { PATH: `${hostLikeDir}:${process.env.PATH || '/usr/bin:/bin'}` },
       encoding: 'utf-8',
+      timeout: 30_000,
     });
     expect(check.status).toBe(0);
     expect(check.stdout).toContain('gbrain 0.18.2');
@@ -341,6 +343,16 @@ describe('gstack-gbrain-source-wireup — wireup mode', () => {
     const r = run([]);
     // ensure_worktree returns 2 → benign skip, exit 0
     expect(r.status).toBe(0);
+  });
+
+  test('--strict with no .git: exits 2 and names the current init command (#1675)', () => {
+    fs.mkdirSync(tmpHome, { recursive: true });
+    fs.writeFileSync(path.join(tmpHome, '.gstack-brain-remote.txt'), 'git@github.com:user/gstack-brain-bob.git\n');
+    makeFakeGbrain({});
+    const r = run(['--strict']);
+    expect(r.status).toBe(2);
+    expect(r.stderr).toContain('run /setup-gbrain Step 7 (gstack-artifacts-init) first');
+    expect(r.stderr).not.toContain('brain-init');
   });
 
   test('source-id from --source-id flag overrides everything', () => {
@@ -526,13 +538,15 @@ describe('gstack-gbrain-source-wireup — defensive paths', () => {
     run([], { env: { GSTACK_BRAIN_NO_SYNC: '1' } });
     // Make a new commit on parent so worktree HEAD is "behind"
     fs.writeFileSync(path.join(gstackHome, 'newfile.md'), 'new');
-    spawnSync('git', ['-C', gstackHome, 'add', '.'], { stdio: 'pipe' });
-    spawnSync('git', ['-C', gstackHome, 'commit', '-q', '-m', 'second commit'], { stdio: 'pipe' });
+    spawnSync('git', ['-C', gstackHome, 'add', '.'], { stdio: 'pipe', timeout: 30_000 });
+    spawnSync('git', ['-C', gstackHome, 'commit', '-q', '-m', 'second commit'], { stdio: 'pipe', timeout: 30_000 });
     const parentHeadAfter = spawnSync('git', ['-C', gstackHome, 'rev-parse', 'HEAD'], {
       encoding: 'utf-8',
+      timeout: 30_000,
     }).stdout.trim();
     const worktreeHeadBefore = spawnSync('git', ['-C', worktreeDir, 'rev-parse', 'HEAD'], {
       encoding: 'utf-8',
+      timeout: 30_000,
     }).stdout.trim();
     expect(parentHeadAfter).not.toBe(worktreeHeadBefore); // sanity: parent advanced
     // --no-pull should leave worktree HEAD where it was
@@ -540,6 +554,7 @@ describe('gstack-gbrain-source-wireup — defensive paths', () => {
     expect(r.status).toBe(0);
     const worktreeHeadAfter = spawnSync('git', ['-C', worktreeDir, 'rev-parse', 'HEAD'], {
       encoding: 'utf-8',
+      timeout: 30_000,
     }).stdout.trim();
     expect(worktreeHeadAfter).toBe(worktreeHeadBefore);
     expect(worktreeHeadAfter).not.toBe(parentHeadAfter);
@@ -560,3 +575,34 @@ describe('gstack-gbrain-source-wireup — defensive paths', () => {
     expect(fs.existsSync(path.join(worktreeDir, 'unrelated.txt'))).toBe(false); // stray gone
   });
 });
+
+// B8 (#2369): the wireup reads `gbrain sources list --json` with bun, so a
+// machine without jq (git-bash on Windows, minimal Linux) still wires up.
+describe('gstack-gbrain-source-wireup without jq (B8)', () => {
+  function pathWithoutJq(): string {
+    const dir = path.join(tmpHome, 'no-jq-bin');
+    fs.mkdirSync(dir, { recursive: true });
+    for (const base of ['/usr/bin', '/bin', '/usr/sbin', '/sbin']) {
+      if (!fs.existsSync(base)) continue;
+      for (const name of fs.readdirSync(base)) {
+        if (name === 'jq' || fs.existsSync(path.join(dir, name))) continue;
+        try { fs.symlinkSync(path.join(base, name), path.join(dir, name)); } catch {}
+      }
+    }
+    return `${fakeBinDir}:${dir}:${BUN_ONLY_DIR}`;
+  }
+
+  test('detects an already-registered source and re-runs cleanly with no jq on PATH', () => {
+    setupGstackRepo('git@github.com:user/gstack-brain-user.git');
+    makeFakeGbrain({});
+    const PATH = pathWithoutJq();
+    expect(spawnSync('sh', ['-c', 'command -v jq'], { env: { PATH }, timeout: 10_000 }).status).not.toBe(0);
+    const first = run([], { env: { PATH, GSTACK_BRAIN_NO_SYNC: '1' } });
+    expect(first.stderr).not.toContain('jq required');
+    expect(first.status).toBe(0);
+    const second = run([], { env: { PATH, GSTACK_BRAIN_NO_SYNC: '1' } });
+    expect(second.status).toBe(0);
+    expect(readState().sources).toHaveLength(1);
+  });
+});
+

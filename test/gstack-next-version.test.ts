@@ -5,7 +5,7 @@
 
 import { test, expect, describe } from "bun:test";
 import { execFileSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, readFileSync, writeFileSync, rmSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -326,7 +326,7 @@ describe("default-base detection (no --base)", () => {
   function runWithoutBase(cwd: string): { exitCode: number; parsed: any } {
     const proc = Bun.spawnSync(
       ["bun", "run", SCRIPT, "--bump", "patch", "--workspace-root", "null"],
-      { cwd },
+      { cwd, timeout: 30_000 },
     );
     const out = new TextDecoder().decode(proc.stdout);
     return { exitCode: proc.exitCode, parsed: JSON.parse(out) };
@@ -403,11 +403,11 @@ describe("offline output contract (what /ship branches on, #2545)", () => {
     // host:"unknown" on CI) while keeping ls-remote/fetch fully local.
     const bare = join(root, "github.com", "origin.git");
     mkdirSync(bare, { recursive: true });
-    Bun.spawnSync(["git", "init", "-q", "--bare", "-b", "main", bare]);
+    Bun.spawnSync(["git", "init", "-q", "--bare", "-b", "main", bare], { timeout: 30_000 });
     const work = join(root, "work");
     mkdirSync(work);
     const git = (...args: string[]) =>
-      Bun.spawnSync(["git", "-c", "user.email=t@t", "-c", "user.name=t", ...args], { cwd: work });
+      Bun.spawnSync(["git", "-c", "user.email=t@t", "-c", "user.name=t", ...args], { cwd: work, timeout: 30_000 });
     git("init", "-q", "-b", "main");
     writeFileSync(join(work, "VERSION"), "1.0.0.0\n");
     git("add", "-A");
@@ -427,7 +427,7 @@ describe("offline output contract (what /ship branches on, #2545)", () => {
     const proc = Bun.spawnSync(
       ["bun", "run", NEXTVER, "--base", "main",
        "--bump", "patch", "--current-version", "1.0.0.0", "--workspace-root", "null"],
-      { cwd: work, env: { ...process.env, PATH: `${stubDir}:${process.env.PATH}` } },
+      { cwd: work, env: { ...process.env, PATH: `${stubDir}:${process.env.PATH}` }, timeout: 30_000 },
     );
     rmSync(stubDir, { recursive: true, force: true });
     rmSync(root, { recursive: true, force: true });
@@ -454,7 +454,7 @@ describe("offline output contract (what /ship branches on, #2545)", () => {
     const proc = Bun.spawnSync(
       ["bun", "run", NEXTVER, "--base", "main",
        "--bump", "patch", "--current-version", "1.0.0.0", "--workspace-root", "null"],
-      { cwd: work, env: { ...process.env, PATH: `${stubDir}:${process.env.PATH}` } },
+      { cwd: work, env: { ...process.env, PATH: `${stubDir}:${process.env.PATH}` }, timeout: 30_000 },
     );
     rmSync(stubDir, { recursive: true, force: true });
     rmSync(root, { recursive: true, force: true });
@@ -475,7 +475,7 @@ describe("fetchGitClaimed (offline allocation — the anti-duplicate fallback, #
   // (plus three earlier pairs found in the same audit). Git knows what the API
   // was asked for, so offline now degrades the QUEUE VIEW, not the ALLOCATION.
   function git(cwd: string, ...args: string[]) {
-    return Bun.spawnSync(["git", "-c", "user.email=t@t", "-c", "user.name=t", ...args], { cwd });
+    return Bun.spawnSync(["git", "-c", "user.email=t@t", "-c", "user.name=t", ...args], { cwd, timeout: 30_000 });
   }
 
   function fixture(): string {
@@ -600,7 +600,7 @@ describe("fetchGitClaimed — non-mutating live remote query (ls-remote first)",
   // remote's LIVE branch list with zero local mutation — a path/file remote
   // answers it offline, which is exactly what these fixtures use.
   function git(cwd: string, ...args: string[]) {
-    return Bun.spawnSync(["git", "-c", "user.email=t@t", "-c", "user.name=t", ...args], { cwd });
+    return Bun.spawnSync(["git", "-c", "user.email=t@t", "-c", "user.name=t", ...args], { cwd, timeout: 30_000 });
   }
 
   // Local origin with: main (0.1.66.0), sibling (0.1.67.0, live claim), and
@@ -718,7 +718,7 @@ describe("fetchGitClaimed — unfetched live claims (G2: ls-remote advertises SH
   // VERSION reads fail. The old `continue` silently dropped that LIVE claim —
   // the exact duplicate-allocation this fallback exists to prevent.
   function git(cwd: string, ...args: string[]) {
-    return Bun.spawnSync(["git", "-c", "user.email=t@t", "-c", "user.name=t", ...args], { cwd });
+    return Bun.spawnSync(["git", "-c", "user.email=t@t", "-c", "user.name=t", ...args], { cwd, timeout: 30_000 });
   }
 
   function cloneFixture(): { root: string; origin: string; clone: string } {
@@ -800,6 +800,7 @@ describe("fetchGitClaimed — unfetched live claims (G2: ls-remote advertises SH
         .split("\n")
         .filter((l) => l.startsWith("fetch "));
       expect(fetches.length).toBe(1);
+      expect(fetches[0]).toContain("--no-auto-maintenance");
       for (const v of ["0-1-70-0", "0-1-71-0", "0-1-72-0"]) {
         expect(fetches[0]).toContain(`refs/heads/late-${v}`);
       }
@@ -908,14 +909,14 @@ describe("width pinned on failed base read (3-digit repos)", () => {
       // the base read fails too, which is the path under test.
       writeFileSync(join(stubDir, "gh"), "#!/bin/sh\nexit 1\n", { mode: 0o755 });
       writeFileSync(join(stubDir, "glab"), "#!/bin/sh\nexit 1\n", { mode: 0o755 });
-      Bun.spawnSync(["git", "init", "-q", "-b", "main"], { cwd: dir });
+      Bun.spawnSync(["git", "init", "-q", "-b", "main"], { cwd: dir, timeout: 30_000 });
       writeFileSync(join(dir, "VERSION"), "0.99.2\n");
-      Bun.spawnSync(["git", "-c", "user.email=t@t", "-c", "user.name=t", "add", "-A"], { cwd: dir });
-      Bun.spawnSync(["git", "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", "init"], { cwd: dir });
+      Bun.spawnSync(["git", "-c", "user.email=t@t", "-c", "user.name=t", "add", "-A"], { cwd: dir, timeout: 30_000 });
+      Bun.spawnSync(["git", "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", "init"], { cwd: dir, timeout: 30_000 });
 
       const proc = Bun.spawnSync(
         ["bun", "run", SCRIPT, "--base", "main", "--bump", "patch", "--workspace-root", "null"],
-        { cwd: dir, env: { ...process.env, PATH: `${stubDir}:${process.env.PATH}` } },
+        { cwd: dir, env: { ...process.env, PATH: `${stubDir}:${process.env.PATH}` }, timeout: 30_000 },
       );
       const out = JSON.parse(new TextDecoder().decode(proc.stdout));
       // Zero base at the repo's OWN width — never "0.0.0.0" in a 3-digit repo.
@@ -930,6 +931,7 @@ describe("width pinned on failed base read (3-digit repos)", () => {
 });
 
 describe("integration (smoke)", () => {
+  const SMOKE_SCRIPT = join(import.meta.dir, "..", "bin", "gstack-next-version");
   // Bumps timeout to 30s — the test spawns a real `bun run` subprocess that
   // does a `gh pr list` against the live GitHub API to inspect claimed slots.
   // Network latency makes 5s tight on developer machines.
@@ -946,7 +948,7 @@ describe("integration (smoke)", () => {
       "1.6.3.0",
       "--workspace-root",
       "null", // skip sibling scan in CI
-    ]);
+    ], { timeout: 30_000 });
     const out = new TextDecoder().decode(proc.stdout);
     const parsed = JSON.parse(out);
     expect(parsed).toHaveProperty("version");
@@ -962,23 +964,201 @@ describe("integration (smoke)", () => {
   }, 30_000); // Headroom over the 4-5s wall time of the spawned process under load
 
   test("CLI runs with --version-path and surfaces it in JSON output", async () => {
-    const proc = Bun.spawnSync([
-      "bun",
-      "run",
-      "./bin/gstack-next-version",
-      "--base",
-      "main",
-      "--bump",
-      "patch",
-      "--current-version",
-      "1.6.3.0",
-      "--workspace-root",
-      "null",
-      "--version-path",
-      "Tinas Second Brain/health-tracker/VERSION",
-    ]);
-    const out = new TextDecoder().decode(proc.stdout);
-    const parsed = JSON.parse(out);
-    expect(parsed).toHaveProperty("version_path", "Tinas Second Brain/health-tracker/VERSION");
+    // G1 (#2334): an explicit --version-path must now exist (a missing pinned
+    // file stops instead of reading as 0.0.0.0), so the pinned path is created
+    // in a scratch repo instead of pointing at nothing inside this checkout.
+    const dir = mkdtempSync(join(tmpdir(), "nextver-vpath-"));
+    const stubDir = mkdtempSync(join(tmpdir(), "nextver-vpath-stub-"));
+    try {
+      writeFileSync(join(stubDir, "gh"), "#!/bin/sh\nexit 1\n", { mode: 0o755 });
+      writeFileSync(join(stubDir, "glab"), "#!/bin/sh\nexit 1\n", { mode: 0o755 });
+      Bun.spawnSync(["git", "init", "-q", "-b", "main"], { cwd: dir, timeout: 30_000 });
+      mkdirSync(join(dir, "Tinas Second Brain", "health-tracker"), { recursive: true });
+      writeFileSync(join(dir, "Tinas Second Brain", "health-tracker", "VERSION"), "1.6.3.0\n");
+      const proc = Bun.spawnSync([
+        "bun",
+        "run",
+        SMOKE_SCRIPT,
+        "--base",
+        "main",
+        "--bump",
+        "patch",
+        "--current-version",
+        "1.6.3.0",
+        "--workspace-root",
+        "null",
+        "--version-path",
+        "Tinas Second Brain/health-tracker/VERSION",
+      ], { cwd: dir, env: { ...process.env, PATH: `${stubDir}:${process.env.PATH}` }, timeout: 30_000 });
+      const out = new TextDecoder().decode(proc.stdout);
+      const parsed = JSON.parse(out);
+      expect(parsed).toHaveProperty("version_path", "Tinas Second Brain/health-tracker/VERSION");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+      rmSync(stubDir, { recursive: true, force: true });
+    }
+  }, 30_000);
+});
+
+describe("fetchGitClaimed — laundered ls-remote (exit 0, empty output) is never trusted", () => {
+  // Some sandbox git wrappers launder exit codes: `git ls-remote --heads origin`
+  // exits 0 with EMPTY output even when no origin exists (observed on the
+  // Conductor /conductor/bin/git shim). Without the originConfigured guard,
+  // that empty "success" reads as a live queue with zero claims — the exact
+  // duplicate-allocation bug the guard closes. On healthy hosts the guarded
+  // and unguarded paths are indistinguishable (ls-remote genuinely fails), so
+  // only a laundering shim can pin the guard against reverts.
+  test("no origin + shim that lies: claims still come from local refs, with the staleness warning", () => {
+    const dir = mkdtempSync(join(tmpdir(), "nextver-launder-"));
+    const stubDir = join(dir, "stub-bin");
+    mkdirSync(stubDir);
+    const realGit = execFileSync("sh", ["-c", "command -v git"]).toString().trim();
+    writeFileSync(
+      join(stubDir, "git"),
+      `#!/bin/sh\nif [ "$1" = "ls-remote" ]; then exit 0; fi\nexec ${realGit} "$@"\n`,
+    );
+    chmodSync(join(stubDir, "git"), 0o755);
+
+    const git = (cwd: string, ...args: string[]) =>
+      Bun.spawnSync(["git", "-c", "user.email=t@t", "-c", "user.name=t", ...args], { cwd, timeout: 30_000 });
+
+    const cwd = process.cwd();
+    const oldPath = process.env.PATH;
+    try {
+      git(dir, "init", "-q", "-b", "main");
+      writeFileSync(join(dir, "VERSION"), "0.1.66.0\n");
+      git(dir, "add", "-A");
+      git(dir, "commit", "-qm", "v0.1.66.0 chore: base");
+      git(dir, "checkout", "-q", "-b", "sibling");
+      writeFileSync(join(dir, "VERSION"), "0.1.67.0\n");
+      git(dir, "add", "-A");
+      git(dir, "commit", "-qm", "v0.1.67.0 feat: sibling claimed this");
+      const sibSha = new TextDecoder().decode(git(dir, "rev-parse", "HEAD").stdout).trim();
+      git(dir, "checkout", "-q", "main");
+      git(dir, "update-ref", "refs/remotes/origin/sibling", sibSha);
+
+      process.chdir(dir);
+      process.env.PATH = `${stubDir}:${oldPath}`;
+      const warnings: string[] = [];
+      const claims = fetchGitClaimed("main", "VERSION", warnings);
+      const versions = claims.map((c) => c.version);
+      // The empty exit-0 probe must NOT be believed as "live queue is empty":
+      expect(versions).toContain("0.1.67.0");
+      expect(warnings.join(" ")).toContain("stale local refs/remotes/origin");
+    } finally {
+      process.env.PATH = oldPath;
+      process.chdir(cwd);
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("origin CONFIGURED + shim that lies: a zero-head exit-0 probe is distrusted, not read as an empty queue", () => {
+    // The normal Conductor worktree state: origin IS configured, but the
+    // laundering shim makes a failed ls-remote exit 0 with empty stdout. A
+    // configured origin that advertises zero heads is contradictory (every
+    // reachable remote advertises at least its default branch), so the
+    // allocator must fall back to local refs with the laundering warning.
+    const dir = mkdtempSync(join(tmpdir(), "nextver-launder-cfg-"));
+    const stubDir = join(dir, "stub-bin");
+    mkdirSync(stubDir);
+    const realGit = execFileSync("sh", ["-c", "command -v git"]).toString().trim();
+    writeFileSync(
+      join(stubDir, "git"),
+      `#!/bin/sh\nif [ "$1" = "ls-remote" ]; then exit 0; fi\nexec ${realGit} "$@"\n`,
+    );
+    chmodSync(join(stubDir, "git"), 0o755);
+
+    const git = (cwd: string, ...args: string[]) =>
+      Bun.spawnSync(["git", "-c", "user.email=t@t", "-c", "user.name=t", ...args], { cwd, timeout: 30_000 });
+
+    const cwd = process.cwd();
+    const oldPath = process.env.PATH;
+    try {
+      git(dir, "init", "-q", "-b", "main");
+      writeFileSync(join(dir, "VERSION"), "0.1.66.0\n");
+      git(dir, "add", "-A");
+      git(dir, "commit", "-qm", "v0.1.66.0 chore: base");
+      git(dir, "checkout", "-q", "-b", "sibling");
+      writeFileSync(join(dir, "VERSION"), "0.1.67.0\n");
+      git(dir, "add", "-A");
+      git(dir, "commit", "-qm", "v0.1.67.0 feat: sibling claimed this");
+      const sibSha = new TextDecoder().decode(git(dir, "rev-parse", "HEAD").stdout).trim();
+      git(dir, "checkout", "-q", "main");
+      git(dir, "update-ref", "refs/remotes/origin/sibling", sibSha);
+      // Configured origin (unreachable path — the shim intercepts before git tries it).
+      git(dir, "remote", "add", "origin", "/nonexistent/laundered-origin.git");
+
+      process.chdir(dir);
+      process.env.PATH = `${stubDir}:${oldPath}`;
+      const warnings: string[] = [];
+      const claims = fetchGitClaimed("main", "VERSION", warnings);
+      const versions = claims.map((c) => c.version);
+      expect(versions).toContain("0.1.67.0");
+      expect(warnings.join(" ")).toContain("advertised zero heads");
+    } finally {
+      process.env.PATH = oldPath;
+      process.chdir(cwd);
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+// G1 (#2334, #2343): gstack-next-version reads the same no-version signal as
+// gstack-version-bump. Before, a repo with no VERSION file got a version
+// allocated from an assumed 0.0.0.0 base, and a broken pin did the same.
+describe("no version source: one signal, never an invented slot (G1)", () => {
+  const SCRIPT = join(import.meta.dir, "..", "bin", "gstack-next-version");
+
+  function runIn(files: Record<string, string>, extra: string[] = []) {
+    const dir = mkdtempSync(join(tmpdir(), "nextver-nover-"));
+    const stubDir = mkdtempSync(join(tmpdir(), "nextver-nover-stub-"));
+    try {
+      writeFileSync(join(stubDir, "gh"), "#!/bin/sh\nexit 1\n", { mode: 0o755 });
+      writeFileSync(join(stubDir, "glab"), "#!/bin/sh\nexit 1\n", { mode: 0o755 });
+      Bun.spawnSync(["git", "init", "-q", "-b", "main"], { cwd: dir, timeout: 30_000 });
+      for (const [rel, body] of Object.entries(files)) {
+        mkdirSync(join(dir, rel, ".."), { recursive: true });
+        writeFileSync(join(dir, rel), body);
+      }
+      const proc = Bun.spawnSync(
+        ["bun", "run", SCRIPT, "--base", "main", "--bump", "patch", "--workspace-root", "null", ...extra],
+        { cwd: dir, env: { ...process.env, PATH: `${stubDir}:${process.env.PATH}` }, timeout: 30_000 },
+      );
+      return {
+        code: proc.exitCode,
+        stdout: new TextDecoder().decode(proc.stdout),
+        stderr: new TextDecoder().decode(proc.stderr),
+      };
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+      rmSync(stubDir, { recursive: true, force: true });
+    }
+  }
+
+  test("a versionless app reports no_version and allocates nothing", () => {
+    const r = runIn({ "package.json": JSON.stringify({ name: "app", version: "2.3.4" }) }, ["--current-version", "0.0.0.0"]);
+    expect(r.code).toBe(0);
+    const out = JSON.parse(r.stdout);
+    expect(out.no_version).toBe(true);
+    expect(out.version).toBeNull();
+    expect(out.version_source.outcome).toBe("absent");
+    expect(out.notice).toContain("Shipped without a version change");
+  }, 30_000);
+
+  test("a release-please repo is ambiguous: no slot, reason named", () => {
+    const r = runIn({ "release-please-config.json": "{}", "package.json": JSON.stringify({ name: "a", version: "1.0.0" }) });
+    expect(r.code).toBe(0);
+    const out = JSON.parse(r.stdout);
+    expect(out.version).toBeNull();
+    expect(out.version_source.outcome).toBe("ambiguous");
+    expect(out.version_source.reason).toContain("release-please");
+  }, 30_000);
+
+  test("a broken pin stops with the path instead of assuming 0.0.0.0", () => {
+    const r = runIn({ ".gstack/version-path": "apps/web/package.json\n" });
+    expect(r.code).toBe(2);
+    expect(r.stdout).toBe("");
+    expect(r.stderr).toContain("apps/web/package.json does not exist");
+    expect(r.stderr).not.toContain("assuming");
   }, 30_000);
 });
