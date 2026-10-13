@@ -140,7 +140,7 @@ describe.skipIf(process.platform === 'win32')('runtime roots carry every $GSTACK
 
   test('a runtime root never gains a whole skill directory beside the rendered copies', () => {
     const { root } = buildRoot('codex');
-    for (const dir of ['plan-design-review', 'office-hours']) {
+    for (const dir of ['plan-design-review', 'office-hours', 'document-release']) {
       expect(fs.readdirSync(path.join(root, dir))).toEqual(['SKILL.md']);
       expect(fs.lstatSync(path.join(root, dir, 'SKILL.md')).isSymbolicLink()).toBe(false);
       expect(fs.readFileSync(path.join(root, dir, 'SKILL.md'), 'utf8')).toContain('$GSTACK_ROOT');

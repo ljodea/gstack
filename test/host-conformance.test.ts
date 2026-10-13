@@ -240,7 +240,7 @@ describe.skipIf(process.platform === 'win32')('host conformance kit', () => {
     expect(saved![1]).toBe(router);
     expect(saved![2].startsWith(join(f.home, '.gstack/backups/skill-copies/'))).toBe(true);
     expect(readFileSync(saved![2], 'utf8')).toEndWith('\nmy local note\n');
-    expect(upgrade.stdout).toContain(`refreshed SKILL.md copies in ${join(f.home, '.codex/skills/gstack')}: SKILL.md gstack-upgrade/SKILL.md office-hours/SKILL.md`);
+    expect(upgrade.stdout).toContain(`refreshed SKILL.md copies in ${join(f.home, '.codex/skills/gstack')}: SKILL.md document-release/SKILL.md gstack-upgrade/SKILL.md office-hours/SKILL.md`);
   }, 90_000);
 
   test('a Codex namespace captured by a vendored project copy is reported, never repointed (#2879)', () => {
